@@ -1,9 +1,10 @@
 // =====================================================================
-//  HEXA STAGE  CPZ ｹｰｽ v0.1.1 — 本体＋USB-C PWR 基板＋CIO SMARTCOBY SLIM 5000mAh を全部包む外装
+//  HEXA STAGE  CPZ ｹｰｽ v0.1.2 — 本体＋USB-C PWR 基板＋CIO SMARTCOBY SLIM 5000mAh を全部包む外装
+//  - ねじ: M3×16 ﾎﾞﾀﾝﾍｯﾄﾞ ×4、M3 熱圧入ｲﾝｻｰﾄ (外径5×長さ4) ×4
 //  - 正面から見て本体のまわりに 12mm の枠 (上下左右同じ)。2分割:
 //      A = 前ﾌﾚｰﾑ (本体と上の基板が入る。正面の縁が本体を押さえる)
 //      B = 後ろｹｰｽ (ﾓﾊﾞﾌﾞが入る。背面に残量窓)
-//    A と B は四隅の M2 ねじ (B の背面から、A の M2 ｲﾝｻｰﾄへ) で留める。ﾓﾊﾞﾌﾞが本体を前へ押し、
+//    A と B は四隅の M3 ねじ (B の背面から、A の M3 ｲﾝｻｰﾄへ) で留める。ﾓﾊﾞﾌﾞが本体を前へ押し、
 //    本体は正面の縁とﾓﾊﾞﾌﾞにはさまれる (本体へのねじ留めなし)
 //  - 上の基板は天井の中に隠れる。天面には IR の窓だけ
 //  - 左右の側面: 本体のﾎﾟｰﾄ (左 USB-A/USB-C/LAN、右 USB-C/Grove/音声/HDMI) が見える大きな窓
@@ -45,15 +46,16 @@ Bdep   = bat_y0 + TB + 0.3 + back_t;       // B の奥行き (14.6)
 bx = 31.0;  PW = 22.0;  PD = 17.6;  brd_top = BH + 2.5 + 1.6;   // 基板の上面 (z)
 press_gap = 0.15;
 ir = [5.4, 14.4, 16.8, 20.2];              // IR の窓 (x0, x1, 背面からの奥行き y0, y1)
-// ---- ねじ (M2 ｲﾝｻｰﾄ)
-ins_d = 3.2;  ins_h = 5.5;                 // ｲﾝｻｰﾄの穴 (持っているｲﾝｻｰﾄに合わせる)
-scr_d = 2.4;  head_d = 4.2;
-screw_len = 16;                            // 使うねじの長さ → 頭の沈め深さが決まる
-col_r = 2.9;
+// ---- ねじ (M3 熱圧入ｲﾝｻｰﾄ 外径5 × 長さ4)
+ins_d = 4.4;  ins_h = 5.0;                 // ｲﾝｻｰﾄの穴 (外径 5 → φ4.4、長さ 4 → 深さ 5)
+scr_d = 3.4;  head_d = 6.2;                // M3 の通し穴と、ﾎﾞﾀﾝﾍｯﾄﾞ (φ5.7) の座ぐり
+screw_len = 16;                            // 使うねじの長さ (M3×16) → 頭の沈め深さが決まる
+col_r_a = 3.6;                             // A の柱 (ｲﾝｻｰﾄ)
+col_r_b = 2.3;                             // B の柱 (通し穴。ﾓﾊﾞﾌﾞをよけるため細い)
 
 X0 = -m;  X1 = BW + m;  Z0 = -m;  Z1 = BH + m;
 iX0 = X0 + t;  iX1 = X1 - t;  iZ0 = Z0 + t;  iZ1 = Z1 - t;
-cols = [[X0 + 3.8, Z0 + 3.8], [X1 - 3.8, Z0 + 3.8], [X0 + 3.8, Z1 - 3.8], [X1 - 3.8, Z1 - 3.8]];
+cols = [[X0 + 4.4, Z0 + 4.4], [X1 - 4.4, Z0 + 4.4], [X0 + 4.4, Z1 - 4.4], [X1 - 4.4, Z1 - 4.4]];
 bat_x0 = iX0 + bay;  bat_x1 = bat_x0 + LB + 2*bfit;
 bat_z1 = bat_z0 + HB + 2*bfit;
 
@@ -86,7 +88,7 @@ module part_a() {
         rbox(-c, BW + c, -c, BH + c, -BD - c, 1, 2.5);
       }
       // 四隅の柱 (ｲﾝｻｰﾄ)
-      for (p = cols) translate([p[0], 0, p[1]]) rotate([90, 0, 0]) cylinder(r = col_r, h = -front - 1);
+      for (p = cols) translate([p[0], 0, p[1]]) rotate([90, 0, 0]) cylinder(r = col_r_a, h = -front - 1);
       // 本体の位置決めﾘﾌﾞ (すべて y 方向に伸びる板 = 正面を下に刷ると縦)
       rib_y = [front + 1.5, 0];
       for (zz = [[0.4, 1.6], [BH - 1.6, BH - 0.4]]) {                 // 左右 (窓の上下の外)
@@ -128,12 +130,15 @@ module part_b() {
           rbox(iX0 - 0.5, iX1 + 0.5, iZ0 - 0.5, iZ1 + 0.5, -eps, 1.0, R_out - t);     // B の壁とつなぐ
         }
         rbox(iX0 + 1.35, iX1 - 1.35, iZ0 + 1.35, iZ1 - 1.35, -2, 1.1, R_out - t - 1.35);
-        for (p = cols) translate([p[0], 1, p[1]]) rotate([90, 0, 0]) cylinder(r = col_r + 0.3, h = 3);
+        for (p = cols) translate([p[0], 1, p[1]]) rotate([90, 0, 0]) cylinder(r = col_r_a + 0.3, h = 3);
         // 左右の窓の所は縁を切る (窓から見えないように)
         for (xs = [[X0 - 1, iX0 + 2], [iX1 - 2, X1 + 1]]) yz_hole(-3, 0.5, 2.0, 52.0, 0.5, xs[0], xs[1]);
       }
       // 四隅の柱
-      for (p = cols) translate([p[0], Bdep - eps, p[1]]) rotate([90, 0, 0]) cylinder(r = col_r, h = Bdep);
+      for (p = cols) hull() {      // 柱は角の壁とつなぐ
+        translate([p[0], Bdep - eps, p[1]]) rotate([90, 0, 0]) cylinder(r = col_r_b, h = Bdep);
+        translate([p[0] < BW/2 ? iX0 - 0.5 : iX1 - 0.5, 0, p[1] < BH/2 ? iZ0 - 0.5 : iZ1 - 0.5]) cube([1, Bdep, 1]);
+      }
       // ﾓﾊﾞﾌﾞの受け (下)、右端の止め、上の止め、左 (差し込み口側) の止め — どれも y 方向の板
       by = [bat_y0 + 0.3, Bdep - back_t + eps];
       for (x = [bat_x0 + 10, (bat_x0 + bat_x1)/2 + 6, bat_x1 - 12]) translate([x, by[0], iZ0 - eps]) cube([1.6, by[1] - by[0], bat_z0 - iZ0 + eps]);
