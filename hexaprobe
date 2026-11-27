@@ -1,0 +1,30 @@
+#!/bin/sh
+# HEXA PROBE launcher (ランチャー/コマンド共通の入口)
+# アプリは起動中ランチャー(APPLaunch)を SIGSTOP で止める。
+# 異常終了しても本体が固まらないよう、終わったら必ずここでランチャーを再開する。
+DIR=$(dirname "$(readlink -f "$0")")
+APP="$DIR/hexaprobe.py"
+LOG="$HOME/.local/share/hexaprobe/app.log"
+LAUNCHER=M5CardputerZero-APPLaunch
+mkdir -p "$(dirname "$LOG")"
+if [ -t 1 ]; then OUT=/dev/stdout; else OUT="$LOG"; fi
+
+resume_launcher() {
+  pkill -CONT -f "$LAUNCHER" 2>/dev/null || sudo -n pkill -CONT -f "$LAUNCHER" 2>/dev/null
+  return 0
+}
+trap 'resume_launcher; exit 130' INT TERM HUP
+
+case " $* " in
+  *" --probe "*|*" --check-font "*|*" --sim "*) exec /usr/bin/python3 "$APP" "$@" ;;
+esac
+
+if id -nG | tr ' ' '\n' | grep -qx video && id -nG | tr ' ' '\n' | grep -qx input; then
+  /usr/bin/python3 "$APP" "$@" >>"$OUT" 2>&1
+else
+  sudo -n /usr/bin/python3 "$APP" "$@" >>"$OUT" 2>&1
+fi
+RC=$?
+resume_launcher
+[ "$RC" -ne 0 ] && echo "$(date '+%F %T') hexaprobe exited with $RC (launcher resumed)" >>"$LOG"
+exit "$RC"
