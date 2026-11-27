@@ -12,7 +12,8 @@ APPL=/usr/share/APPLaunch
 NEED_REBOOT=0
 
 echo "== packages"
-sudo apt-get install -y python3-pil python3-numpy i2c-tools bluez >/dev/null
+sudo apt-get install -y python3-pil python3-numpy i2c-tools bluez alsa-utils >/dev/null
+sudo apt-get install -y python3-libgpiod >/dev/null 2>&1 || echo "   python3-libgpiod が無いので TEST は pinctrl で読みます"
 
 echo "== files"
 chmod +x "$DIR/hexaprobe.py" "$DIR/hexaprobe" "$DIR/hp_nfc_helper.py"

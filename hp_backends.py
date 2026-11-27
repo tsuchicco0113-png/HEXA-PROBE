@@ -787,6 +787,178 @@ def decode_ir(d):
     return "不明", f"パルス{(n + 1) // 2}個  先頭 {p0}/{s0}µs", ("RAW", n // 4, p0 // 500, s0 // 500)
 
 
+# ================================================================ TEST (導通チェック: G22 ⇔ GND)
+TEST_GPIO = 22             # 14P の正面側の列 5番目 (G22)。ﾃｽﾄ線は 1kΩ を通してから出す
+
+
+def _gpiod():
+    try:
+        import gpiod
+        if hasattr(gpiod, "request_lines"):        # libgpiod v2 の python
+            return gpiod
+    except ImportError:
+        pass
+    return None
+
+
+def _find_gpio_chip(gpiod, gpio):
+    """GPIO22 がどの gpiochip の何番か (名前 "GPIO22" で探す。無ければ bcm の chip の 22 番)"""
+    fallback = None
+    for path in sorted(glob.glob("/dev/gpiochip*")):
+        try:
+            with gpiod.Chip(path) as ch:
+                try:
+                    return path, ch.line_offset_from_id(f"GPIO{gpio}")
+                except (OSError, ValueError):
+                    pass
+                lab = ch.get_info().label
+                if fallback is None and ("bcm2835" in lab or "bcm2711" in lab or "rp1" in lab):
+                    fallback = (path, gpio)
+        except OSError:
+            continue
+    return fallback
+
+
+def test_backend():
+    """('gpiod', 説明) / ('pinctrl', 説明) / (None, 理由)"""
+    g = _gpiod()
+    if g:
+        try:
+            found = _find_gpio_chip(g, TEST_GPIO)
+        except Exception:
+            found = None
+        if found:
+            return "gpiod", f"{found[0]} line {found[1]}"
+    if shutil.which("pinctrl") and _pinctrl(["get", str(TEST_GPIO)]):
+        return "pinctrl", "pinctrl (20回/秒で読む)"
+    return None, "GPIO が読めません (python3-libgpiod か pinctrl、gpio グループ)"
+
+
+class ContinuityReader(Worker):
+    """G22 を内部プルアップの入力にして、GND とつながった (LOW) / 離れた (HIGH) を時刻付きで出す
+    ("level", つながった?, 時刻ns)。gpiod ならエッジを ns 単位で取れる (瞬断の長さが測れる)"""
+    kind = "test"
+
+    def __init__(self):
+        super().__init__()
+        self.mode, self.info = test_backend()
+        if not self.mode:
+            raise RuntimeError(self.info)
+        self.req = None
+
+    def run(self):
+        if self.mode == "gpiod":
+            return self.run_gpiod()
+        return self.run_pinctrl()
+
+    def run_gpiod(self):
+        import gpiod
+        from gpiod.line import Bias, Direction, Edge, Value
+        path, off = _find_gpio_chip(gpiod, TEST_GPIO)
+        self.req = gpiod.request_lines(path, consumer="hexaprobe-test", config={
+            off: gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_UP, edge_detection=Edge.BOTH)})
+        time.sleep(0.01)                          # プルアップが効くまで
+        v = self.req.get_value(off)
+        self.q.put(("level", v == Value.INACTIVE, time.monotonic_ns()))
+        self.raw(f"start {path} line {off} value={v}")
+        while not self.stop_ev.is_set():
+            if not self.req.wait_edge_events(0.2):
+                continue
+            for ev in self.req.read_edge_events():
+                conn = ev.event_type == ev.Type.FALLING_EDGE
+                self.raw(f"{ev.timestamp_ns} {'FALL' if conn else 'RISE'}")
+                self.q.put(("level", conn, ev.timestamp_ns))
+
+    def run_pinctrl(self):
+        _pinctrl(["set", str(TEST_GPIO), "ip", "pu"])
+        last = None
+        while not self.stop_ev.is_set():
+            out = _pinctrl(["get", str(TEST_GPIO)]) or ""
+            conn = bool(re.search(r"\|\s*lo\b", out))
+            if conn != last:
+                self.raw(out.strip())
+                self.q.put(("level", conn, time.monotonic_ns()))
+                last = conn
+            self.stop_ev.wait(0.05)
+
+    def close(self):
+        if self.req is not None:
+            try:
+                self.req.release()
+            except Exception:
+                pass
+            self.req = None
+        elif self.mode == "pinctrl":
+            _pinctrl(["set", str(TEST_GPIO), "ip", "pn"])
+
+
+class Beeper:
+    """本体スピーカーで鳴らし続けるための aplay。on の間だけ音、off は無音を流す (遅れ 30ms ほど)"""
+    RATE, CHUNK = 16000, 160                  # 10ms ずつ
+
+    def __init__(self, freq=2400, vol=0.35):
+        import math as _m
+        self.on = False
+        self.until = 0.0                          # 瞬断でも聞こえるよう最低限鳴らす時刻
+        self.proc = None
+        self.err = None
+        self.muted = False
+        n = self.RATE // freq * 20                # 周期の整数倍で切れ目のない波形
+        self.tone = b"".join(struct.pack("<h", int(32767 * vol * _m.sin(2 * _m.pi * freq * i / self.RATE)))
+                             for i in range(n))
+        self.silence = b"\x00\x00" * self.CHUNK
+        if not shutil.which("aplay"):
+            self.err = "aplay がありません (alsa-utils)"
+            return
+        try:
+            self.proc = subprocess.Popen(["aplay", "-q", "-t", "raw", "-f", "S16_LE", "-r", str(self.RATE), "-c", "1",
+                                          "-B", "40000"], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            self.err = str(e)
+            return
+        self.stop_ev = threading.Event()
+        self.th = threading.Thread(target=self._run, daemon=True)
+        self.th.start()
+
+    def _run(self):
+        pos = 0
+        next_t = time.monotonic()
+        while not self.stop_ev.is_set():
+            sound = (self.on or time.monotonic() < self.until) and not self.muted
+            if sound:
+                b = (self.tone * 3)[pos:pos + self.CHUNK * 2]
+                pos = (pos + self.CHUNK * 2) % len(self.tone)
+            else:
+                b = self.silence
+            try:
+                self.proc.stdin.write(b)
+                self.proc.stdin.flush()
+            except (BrokenPipeError, OSError):
+                self.err = "音が出せません (aplay が終了)"
+                return
+            next_t += self.CHUNK / self.RATE
+            d = next_t - time.monotonic()
+            if d > 0:
+                time.sleep(d)
+            else:
+                next_t = time.monotonic()
+
+    def set(self, on, min_sec=0.0):
+        self.on = on
+        if min_sec:
+            self.until = max(self.until, time.monotonic() + min_sec)
+
+    def close(self):
+        if self.proc:
+            self.stop_ev.set()
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
+            self.proc.terminate()
+            self.proc = None
+
+
 # ================================================================ 準備状況 (ホーム画面用)
 def detect_all():
     """{key: (六角形の下の文字, OK?, [説明の行])}"""
@@ -803,7 +975,7 @@ def detect_all():
         r["ble"] = ("OK", True, ["ENTER でスキャン開始", "電波の強い順に並びます"])
     rd = nfc_reader()
     py = nfc_python_guess()
-    r["nfc"] = (rd or "なし", bool(rd), [f"リーダー: {rd or 'なし (RC-S380 を挿す)'}",
+    r["nfc"] = ("OK" if rd else "なし", bool(rd), [f"リーダー: {rd or 'なし (RC-S380 を挿す)'}",
                                          f"nfcpy: {'~/nfc' if py else 'python3 (未確認)'}"])
     src = list_midi_sources()
     r["midi"] = (f"{len(src)}系統" if src else "なし", bool(src), [f"{n}  {s}" for n, s, _ in src][:4] or ["なし"])
@@ -817,6 +989,10 @@ def detect_all():
     r["ir"] = ("OK" if dev else "未設定", bool(dev),
                [f"受信: {dev}  (GPIO13)"] if dev else ["受信機がまだ有効になっていません",
                                                      "sh install.sh --ir → 再起動"])
+    mode, info = test_backend()
+    r["test"] = ("G22" if mode else "なし", bool(mode),
+                 ([f"読み方: {info}"] if mode else [info]) +
+                 ["ﾃｽﾄ線: G22 →1kΩ→ / GND", "電源を切った回路だけ!"])
     return r
 
 
@@ -920,6 +1096,21 @@ class FakeI2c(FakeWorker):
 
     def rescan(self):
         pass
+
+
+class FakeTest(FakeWorker):
+    mode, info = "gpiod", "sim"
+
+    def __init__(self):
+        super().__init__()
+        ns = lambda t: int(t * 1e9)              # noqa: E731
+        sc = [(0.05, ("level", False, ns(0.05)))]
+        t = 0.3
+        for conn, dt in [(True, 0.6), (False, 0.4), (True, 0.9), (False, 0.003), (True, 0.5), (False, 0.012),
+                         (True, 0.3), (False, 0.5)]:
+            sc.append((t, ("level", conn, ns(t))))
+            t += dt
+        self.script = sc
 
 
 class FakeIr(FakeWorker):

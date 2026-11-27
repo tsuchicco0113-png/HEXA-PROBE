@@ -34,7 +34,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hp_backends as B  # noqa: E402
 
-VERSION = "0.1.2"
+VERSION = "0.2.0"
 LCD_W, LCD_H = 320, 170
 TOP_H, BOT_H = 18, 16
 BY0, BY1 = TOP_H + 2, LCD_H - BOT_H - 2          # 本文の上下
@@ -58,6 +58,7 @@ MODS = [  # key, 六角形の名前, 説明
     ("midi", "MIDI", "MIDI メッセージを見る"),
     ("i2c", "I2C", "I2C バスに何がいるか探す"),
     ("ir", "IR", "赤外線リモコンの信号を読む"),
+    ("test", "TEST", "導通チェック (G22 ⇔ GND)"),
 ]
 
 # ================================================================ keys (HEXA CLIP / POWER と同じ)
@@ -1403,13 +1404,183 @@ class IrView(View):
                     app.font_t, CYAN)
 
 
-VIEWS = {"serial": SerialView, "ble": BleView, "nfc": NfcView, "midi": MidiView, "i2c": I2cView, "ir": IrView}
+# ================================================================ 7 TEST (導通チェック)
+class TestView(View):
+    """G22 (1kΩ 経由) と GND の2本のテスト線。つながったら鳴る / 断線探しモードでは離れたら鳴る。
+    gpiod ならエッジの時刻 (ns) で瞬断の長さまで出す"""
+    key, name = "test", "TEST"
+    GLITCH = 0.05                 # これより短い「つながり/離れ」は瞬間的なもの (瞬断・チャタリング)
+    SPAN = 10.0                   # 波形の表示秒数
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.worker = None
+        self.beep = None
+        self.conn = None
+        self.t_change = None          # 最後に変わった時刻 (ns, エッジの時計)
+        self.hist = collections.deque(maxlen=400)   # (monotonic秒, つながった?)
+        self.box = LogBox()
+        self.n_touch = self.n_glitch = 0
+        self.find_break = False       # True = 断線探し (離れたら鳴る)
+        self.err = ""
+        self.last_dur = None
+
+    def enter(self):
+        try:
+            self.worker = self.app.backend("ContinuityReader")().start()
+        except Exception as e:
+            self.err = str(e)
+            return
+        if not self.app.sim:
+            self.beep = B.Beeper()
+            if self.beep.err:
+                self.app.say(self.beep.err, 4)
+        self.app.say("電源を切った回路だけ当ててね", 3)
+        self.log(f"start {getattr(self.worker, 'info', '')}")
+
+    def leave(self):
+        if self.worker:
+            self.worker.stop()
+            self.worker = None
+        if self.beep:
+            self.beep.close()
+            self.beep = None
+        super().leave()
+
+    def tick(self):
+        if not self.worker:
+            return False
+        dirty = False
+        for ev in self.worker.events():
+            dirty = True
+            if ev[0] == "error":
+                self.err = ev[1]
+                self.app.say(ev[1], 4)
+                continue
+            if ev[0] != "level":
+                continue
+            _, conn, tns = ev
+            if conn == self.conn:
+                continue
+            if self.conn is not None and self.t_change is not None:
+                dur = (tns - self.t_change) / 1e9
+                self.last_dur = dur
+                was = "導通" if self.conn else "開放"
+                short = dur < self.GLITCH
+                if short:
+                    self.n_glitch += 1
+                    word = "瞬断" if not self.conn else "瞬間接触"
+                    self.box.add(f"{time.strftime('%H:%M:%S')}  {word} {dur * 1000:.1f}ms", WARN)
+                    self.log(f"{word} {dur * 1000:.2f}ms")
+                else:
+                    self.box.add(f"{time.strftime('%H:%M:%S')}  {was} {dur:.2f}s → {'導通' if conn else '開放'}",
+                                 ACC if conn else SUB)
+                    self.log(f"{was} {dur:.3f}s -> {'CONN' if conn else 'OPEN'}")
+            if conn:
+                self.n_touch += 1
+            self.conn, self.t_change = conn, tns
+            self.hist.append((time.monotonic(), conn))
+            if self.beep:
+                ring = conn != self.find_break
+                self.beep.set(ring, 0.06 if ring else 0)       # 一瞬でも聞こえるように 60ms は鳴らす
+        return dirty or bool(self.hist)                       # 波形を流す
+
+    def status(self):
+        st = "?" if self.conn is None else ("導通" if self.conn else "開放")
+        mode = "断線探し" if self.find_break else "導通で鳴る"
+        mute = " 消音" if (self.beep and self.beep.muted) else ""
+        return f"{st}  {mode}{mute}"
+
+    def help(self):
+        return "T:導通/断線探し S:音 BS:消去 ↑↓:遡る L:記録 ESC:戻る"
+
+    def on_key(self, kind, val):
+        if val == "ESC":
+            return "back"
+        if val == "t":
+            self.find_break = not self.find_break
+            self.app.say("断線探し: 離れた瞬間に鳴ります。線を曲げながら当てて" if self.find_break
+                         else "導通チェック: つながったら鳴ります", 3)
+            if self.beep and self.conn is not None:
+                self.beep.set(self.conn != self.find_break)
+        elif val == "s" and self.beep:
+            self.beep.muted = not self.beep.muted
+            self.app.say("消音" if self.beep.muted else "音を出します")
+        elif val == "BS":
+            self.box.clear()
+            self.n_touch = self.n_glitch = 0
+        elif val == "UP":
+            self.box.scroll(3)
+        elif val == "DOWN":
+            self.box.scroll(-3)
+        elif val == "l":
+            self.toggle_rec()
+        return None
+
+    def draw(self, img, d):
+        app = self.app
+        if not self.worker:
+            for i, t in enumerate(["G22 が読めません", self.err, "",
+                                   "python3-libgpiod か pinctrl が要ります",
+                                   "(sh install.sh で入ります。gpio グループも)"]):
+                app.fit(d, (10, BY0 + 6 + i * 16), t, LCD_W - 20, app.font_s if i == 0 else app.font_t,
+                        WARN if i == 0 else FG)
+            return
+        # 左: 大きな状態
+        on = bool(self.conn)
+        alarm = self.conn is not None and (on != self.find_break)
+        box = (4, BY0, 120, BY0 + 62)
+        d.rounded_rectangle(box, 8, fill=(30, 22, 46) if on else (18, 21, 29),
+                            outline=(ACC if on else (60, 66, 80)) if not alarm or not self.find_break else WARN,
+                            width=3 if alarm else 1)
+        cx, cy = 26, BY0 + 31
+        d.ellipse((cx - 13, cy - 13, cx + 13, cy + 13), fill=ACC if on else (40, 44, 56))
+        word = "?" if self.conn is None else ("導通" if on else "開放")
+        d.text((46, BY0 + 10), word, fill=FG if on else SUB, font=app.font_big)
+        dur = ""
+        if self.t_change is not None and self.hist:
+            dur = f"{time.monotonic() - self.hist[-1][0]:.1f}s"
+        d.text((46, BY0 + 34), dur, fill=SUB, font=app.font_t)
+        # 右: 数と最後の長さ
+        x = 128
+        d.text((x, BY0), "断線探し (離れたら鳴る)" if self.find_break else "導通で鳴る", fill=YEL, font=app.font_t)
+        d.text((x, BY0 + 14), f"接触 {self.n_touch}回", fill=FG, font=app.font_s)
+        d.text((x + 90, BY0 + 14), f"瞬間 {self.n_glitch}回", fill=WARN if self.n_glitch else SUB, font=app.font_s)
+        if self.last_dur is not None:
+            ld = self.last_dur
+            d.text((x, BY0 + 31), "直前の長さ " + (f"{ld * 1000:.1f}ms" if ld < 1 else f"{ld:.2f}s"),
+                   fill=SUB, font=app.font_t)
+        d.text((x, BY0 + 45), "約15kΩ以下で導通 (1kΩ込み)", fill=(90, 98, 115), font=app.font_t)
+        # 波形 (直近10秒)
+        gx0, gy0, gx1, gy1 = 4, BY0 + 66, LCD_W - 4, BY0 + 84
+        d.rectangle((gx0, gy0, gx1, gy1), outline=(40, 46, 60))
+        now = time.monotonic()
+        pts = [(t, c) for t, c in self.hist if now - t < self.SPAN]
+        prev = [c for t, c in self.hist if now - t >= self.SPAN]
+        level = prev[-1] if prev else (pts[0][1] if pts else bool(self.conn))
+        lx = gx0 + 1
+
+        def yv(c):
+            return gy0 + 3 if c else gy1 - 3
+        for t, c in pts + [(now, None)]:
+            x2 = gx1 - 1 - (now - t) / self.SPAN * (gx1 - gx0 - 2)
+            d.line((lx, yv(level), x2, yv(level)), fill=ACC if level else SUB, width=2)
+            if c is not None:
+                d.line((x2, yv(level), x2, yv(c)), fill=FG, width=1)
+                level, lx = c, x2
+        d.text((gx0 + 3, gy0 + 3), "10秒", fill=(80, 88, 104), font=app.font_t)
+        self.box.draw(app, d, 4, gy1 + 3, LCD_W - 4, BY1, lh=12)
+
+
+VIEWS = {"serial": SerialView, "ble": BleView, "nfc": NfcView, "midi": MidiView, "i2c": I2cView, "ir": IrView,
+         "test": TestView}
 
 
 # ================================================================ app
 class App:
-    HEX_R = 25
-    POS = [(27, 48), (74, 48), (121, 48), (50, 86), (97, 86), (144, 86)]
+    HEX_R = 22
+    POS = [(23, 44), (64, 44), (105, 44), (146, 44), (43, 80), (84, 80), (125, 80)]   # 上4つ + 下3つ
+    ROWS = [[0, 1, 2, 3], [4, 5, 6]]
 
     def __init__(self, fb, keys, sim=False, backends=None, debug=False):
         self.fb, self.keys, self.sim = fb, keys, sim
@@ -1420,7 +1591,7 @@ class App:
         self.font_t = find_font(10)
         self.font_bs = find_font(11, bold=True)
         self.font_big = find_font(16, bold=True)
-        self.font_hex = find_font(11, bold=True)
+        self.font_hex = find_font(10, bold=True)
         self.mono = find_mono(10)
         self.mono_big = find_mono(13)
         self.honey = honeycomb_bg()
@@ -1489,9 +1660,10 @@ class App:
                 d.polygon(pts, outline=(44, 50, 64), width=2)
             lab, ok, _ = self.det.get(k, ("…", False, []))
             f = self.font_hex
-            d.text((cx - f.getlength(name) / 2, cy - 15), name, fill=FG if on else SUB, font=f)
+            d.text((cx - f.getlength(name) / 2, cy - 14), name, fill=FG if on else SUB, font=f)
             ft = self.font_t
-            lab = lab if ft.getlength(lab) < 2 * r - 6 else lab[:5]
+            while lab and ft.getlength(lab) > 2 * r - 8:
+                lab = lab[:-1]
             d.text((cx - ft.getlength(lab) / 2, cy + 1), lab, fill=ACC if ok else NA, font=ft)
         # 右: 選んだ機能の説明と準備状況
         k, name, desc = MODS[self.sel]
@@ -1510,17 +1682,19 @@ class App:
         return img.copy()
 
     def move(self, act):
-        row, col = divmod(self.sel, 3)
+        n = len(MODS)
+        row = 0 if self.sel in self.ROWS[0] else 1
+        r = self.ROWS[row]
+        col = r.index(self.sel)
         if act == "LEFT":
-            col = (col - 1) % 3
+            self.sel = r[(col - 1) % len(r)]
         elif act == "RIGHT":
-            col = (col + 1) % 3
+            self.sel = r[(col + 1) % len(r)]
         elif act in ("UP", "DOWN"):
-            row = 1 - row
+            other = self.ROWS[1 - row]
+            self.sel = other[min(col, len(other) - 1)]
         elif act == "TAB":
-            self.sel = (self.sel + 1) % 6
-            return
-        self.sel = row * 3 + col
+            self.sel = (self.sel + 1) % n
 
     # ---- 画面全体
     def frame(self):
@@ -1619,7 +1793,7 @@ class App:
         self.fit(d, (max(x, LCD_W - 4 - self.font_t.getlength(st)), 3), st, LCD_W - 4 - x, self.font_t, SUB)
         d.rectangle((0, LCD_H - BOT_H, LCD_W, LCD_H), fill=(0, 0, 0))
         if self.view is None:
-            hp = "FXZC:選ぶ 1-6:直接 ENTER:開く D:デバッグ ESC:終了"
+            hp = "FXZC:選ぶ 1-7:直接 ENTER:開く D:デバッグ ESC:終了"
         elif self.view.broken:
             hp = "ESC:ホームへ"
         else:
@@ -1705,7 +1879,7 @@ class App:
                         self.open_view(self.sel)
                     elif kind == "ACT":
                         self.move(val)
-                    elif kind == "CHAR" and val in "123456":
+                    elif kind == "CHAR" and val in "1234567"[:len(MODS)]:
                         self.sel = int(val) - 1
                         self.open_view(self.sel)
                     elif kind == "CHAR" and val == "d":
@@ -1790,10 +1964,12 @@ def sim_detect():
     return {"serial": ("2個", True, ["ttyUSB0  CP2102N USB to UART  10c4:ea60",
                                      "Grove UART  serial0 → ttyS0"]),
             "ble": ("OK", True, ["ENTER でスキャン開始", "電波の強い順に並びます"]),
-            "nfc": ("RC-S380", True, ["リーダー: RC-S380", "nfcpy: ~/nfc"]),
+            "nfc": ("OK", True, ["リーダー: RC-S380", "nfcpy: ~/nfc"]),
             "midi": ("2系統", True, ["UMONE  USB MIDI  midiC1D0", "Grove UART  Unit MIDI (31250bps)"]),
             "i2c": ("bus1", True, ["バス: i2c-1", "Grove: UART  (画面の G で I2C に)", "Grove の電源は 設定 > ExtPort"]),
-            "ir": ("未設定", False, ["受信機がまだ有効になっていません", "sh install.sh --ir → 再起動"])}
+            "ir": ("未設定", False, ["受信機がまだ有効になっていません", "sh install.sh --ir → 再起動"]),
+            "test": ("G22", True, ["読み方: /dev/gpiochip0 line 22", "ﾃｽﾄ線: G22 →1kΩ→ / GND",
+                                   "電源を切った回路だけ!"])}
 
 
 def run_sim(outdir):
@@ -1802,7 +1978,8 @@ def run_sim(outdir):
     B.list_midi_sources = lambda: [("UMONE", "USB MIDI  midiC1D0", ("raw", "/dev/snd/midiC1D0")),
                                    ("Grove UART", "Unit MIDI の MIDI IN など (31250bps)", ("uart", "/dev/serial0"))]
     backends = {"SerialReader": B.FakeSerial, "BleScanner": B.FakeBle, "NfcWorker": B.FakeNfc,
-                "MidiReader": B.FakeMidi, "I2cScanner": B.FakeI2c, "IrReader": B.FakeIr, "detect_all": sim_detect}
+                "MidiReader": B.FakeMidi, "I2cScanner": B.FakeI2c, "IrReader": B.FakeIr, "ContinuityReader": B.FakeTest,
+                "detect_all": sim_detect}
     fb = SimFB(outdir)
     A, C, S = (lambda v: ("ACT", v)), (lambda v: ("CHAR", v)), (lambda n: ("SNAP", n))
     script = [(0.6, S("01_home.png")), (0.1, A("RIGHT")), (0.3, S("02_home_ble.png")),
@@ -1822,7 +1999,10 @@ def run_sim(outdir):
               (0.2, C("5")), (0.6, S("13_i2c.png")), (1.2, S("14_i2c_new.png")), (0.1, A("ESC")),
               # IR
               (0.2, C("6")), (2.0, S("15_ir.png")), (0.1, A("DOWN")), (0.1, A("DOWN")), (0.1, A("ENTER")),
-              (0.3, S("16_ir_raw.png")), (0.1, A("ESC")), (0.1, A("ESC")), (0.5, S("17_home_ir.png"))]
+              (0.3, S("16_ir_raw.png")), (0.1, A("ESC")), (0.1, A("ESC")), (0.5, S("17_home_ir.png")),
+              # TEST
+              (0.1, A("RIGHT")), (0.3, S("18_home_test.png")), (0.1, A("ENTER")), (0.9, S("19_test_conn.png")),
+              (2.9, S("20_test_glitch.png")), (0.1, C("t")), (0.4, S("21_test_break.png")), (0.1, A("ESC"))]
     ref = [None]
     keys = SimKeys(script, fb, ref)
     app = App(fb, keys, sim=True, backends=backends)
