@@ -165,7 +165,7 @@ def list_serial_ports():
         out.append((name, sub, dev))
     if os.path.exists("/dev/serial0"):
         out.append(("Grove UART", "serial0 → " + os.path.basename(os.path.realpath("/dev/serial0")) +
-                    "  (Grove の黄=TX 白=RX)", "/dev/serial0"))
+                    "  (黄=CPZ の受信 白=送信: 相手の TX→黄 RX→白)", "/dev/serial0"))
     return out
 
 

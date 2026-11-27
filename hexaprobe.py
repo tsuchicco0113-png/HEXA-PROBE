@@ -34,7 +34,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hp_backends as B  # noqa: E402
 
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 LCD_W, LCD_H = 320, 170
 TOP_H, BOT_H = 18, 16
 BY0, BY1 = TOP_H + 2, LCD_H - BOT_H - 2          # 本文の上下
@@ -2009,7 +2009,7 @@ def sim_detect():
 
 def run_sim(outdir):
     B.list_serial_ports = lambda: [("ttyUSB0", "CP2102N USB to UART  10c4:ea60", "/dev/ttyUSB0"),
-                                   ("Grove UART", "serial0 → ttyS0  (Grove の黄=TX 白=RX)", "/dev/serial0")]
+                                   ("Grove UART", "serial0 → ttyS0  (黄=CPZ の受信 白=送信: 相手の TX→黄 RX→白)", "/dev/serial0")]
     B.list_midi_sources = lambda: [("UMONE", "USB MIDI  midiC1D0", ("raw", "/dev/snd/midiC1D0")),
                                    ("Grove UART", "Unit MIDI の MIDI IN など (31250bps)", ("uart", "/dev/serial0"))]
     backends = {"SerialReader": B.FakeSerial, "BleScanner": B.FakeBle, "NfcWorker": B.FakeNfc,
