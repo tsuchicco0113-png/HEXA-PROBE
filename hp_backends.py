@@ -125,7 +125,16 @@ def set_raw(fd):
 
 
 def set_baud(fd, baud):
-    """どんな速度でも (31250 / 74880 も) termios2 の BOTHER で設定する"""
+    """標準の速度 (115200 など) は普通の B115200 で、ない速度 (31250 / 74880) だけ termios2 の BOTHER で設定する。
+    CH9102 などの USB ｼﾘｱﾙ (cdc_acm) は BOTHER だと速度が入らず、文字を黙って捨てていた (実機 2026-11-28)"""
+    name = f"B{baud}"
+    if hasattr(termios, name):
+        a = termios.tcgetattr(fd)
+        a[2] &= ~(termios.CBAUD | getattr(termios, "CBAUDEX", 0))
+        a[2] |= getattr(termios, name)
+        a[4] = a[5] = getattr(termios, name)
+        termios.tcsetattr(fd, termios.TCSANOW, a)
+        return
     buf = bytearray(struct.calcsize(T2))
     try:
         fcntl.ioctl(fd, TCGETS2, buf)

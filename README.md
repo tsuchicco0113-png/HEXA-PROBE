@@ -1,4 +1,4 @@
-# HEXA PROBE v0.2.9
+# HEXA PROBE v0.2.10
 
 CardputerZero 用の「なんでも覗く」ﾂｰﾙ。ﾊﾆｶﾑのﾎｰﾑから 7 つの覗き窓を選ぶ。
 画面の作りは HEXA CLIP / HEXA POWER と同じ流儀 (強調色は紫)。
