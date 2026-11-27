@@ -1,8 +1,8 @@
 // =====================================================================
-//  HEXA STAGE  CPZ USB-C PWR + TEST ｷｬｯﾌﾟ v0.1
-//  Cap LoRa-1262 と同じ「上面まるごと」の形 (84 x 24)。
-//  中に USB-C PWR 基板 v0.2 と導通ﾁｪｯｸの配線 (G22 →1kΩ→ 赤 / GND → 黒) を収め、
-//  右端からﾃｽﾄ線2本を出す (先に 4mm ﾊﾞﾅﾅのﾒｽ)。
+//  HEXA STAGE  CPZ USB-C PWR + TEST ｷｬｯﾌﾟ v0.2  (ﾊﾞﾅﾅｼﾞｬｯｸ MK-628 を左右に)
+//  Cap LoRa-1262 と同じ「上面まるごと」の形と高さ (84 x 24 x 15.2)。
+//  中に USB-C PWR 基板 v0.2 を収め、4mm ﾊﾞﾅﾅｼﾞｬｯｸを左右の端に1つずつ:
+//    左 = COM (黒, GND)   右 = Ω (赤, G22 →1kΩ→ ｼﾞｬｯｸ。1kΩ はｼﾞｬｯｸの端子に直付け)
 //
 //  座標は v0.2 ｶﾊﾞーと同じ: x = 本体を正面から見た左→右 (本体の左端 0)、
 //  y = 背面からの奥行き (背面 0)、z = 本体上面から上。印刷は天面を下に (part="print")
@@ -25,15 +25,20 @@ led   = [bx + 7.2, 16.45];
 press = 0.3;          // 柱が基板を押し下げる量 (mm)。ｶﾀつく→増やす / ｷｬｯﾌﾟが入りきらない→減らす (0〜0.5)
 // ---- ｷｬｯﾌﾟ
 wall = 1.6;  roof = 1.6;
-inner_h = hdr_h + pcb_t + usb_h + 1.0;          // 中の高さ (線と抵抗の分 +0.6)
-H  = inner_h + roof;                            // 約 10mm (Cap LoRa は 15.2)
+H  = 15.2;                                      // Cap LoRa-1262 と同じ高さ
+inner_h = H - roof;                             // 中の高さ (ﾅｯﾄを回す余裕)
 y0 = usb_y0 - 0.2 - wall;                       // 背面側は USB-C の口の分だけ出す
 y1 = BD;                                        // 正面は本体と面一
 r_side = 3.0;  r_top = 2.0;
-// ---- ﾃｽﾄ線 (右端から)
-wire_d  = 3.2;                                  // ﾃｽﾄ線の外径 + 余裕 (AWG22〜20 想定)
-wires   = [[15.0, "Ω"], [6.0, "COM"]];          // [y, 刻印]  正面寄り=赤(G22) / 背面寄り=黒(GND)
-wire_z  = 3.6;
+// ---- 4mm ﾊﾞﾅﾅｼﾞｬｯｸ 秋月 MK-628-0 (赤) / MK-628-1 (黒)
+//      秋月の表記: 取付穴 9mm、径 10.5mm、長さ 25.7mm。つばの厚み・ﾅｯﾄの大きさは未確認 (現物で確認)
+jack_hole   = 9.2;                              // 取付穴 9mm + 印刷の縮み分
+jack_flange = 0;                                // つばを沈める座ぐり (0 = なし。現物を見てから)
+jack_seat   = 0.6;                              // つばを沈める深さ
+end_wall    = 2.0;                              // ｼﾞｬｯｸを付ける端の壁の厚み (ﾈｼﾞ長に合わせる)
+jack_y = (usb_y0 - 0.2 - wall + BD) / 2;        // 奥行きの真ん中
+jack_z = 7.0;                                   // 上面からの高さ (中心)
+jacks  = [[0, "COM"], [1, "Ω"]];                // [0=左 / 1=右, 正面の刻印]
 // ---- 背面の耳 (M2 ﾈｼﾞ、Cap LoRa と同じ止め方。不要なら false)
 use_ears = true;
 ears_x   = [28, 56];                            // 背面上端ｽﾄﾘｯﾌﾟの M2 (左右対称)
@@ -76,22 +81,28 @@ module ear(x) {
 module shell() {
   difference() {
     rounded_block(0, BW, y0, y1, H);
-    // 中 (底から inner_h まで)
-    translate([wall, y0 + wall, -eps]) cube([BW - 2*wall, y1 - y0 - 2*wall, inner_h + eps]);
+    // 中 (底から inner_h まで)。左右の端は end_wall
+    translate([end_wall, y0 + wall, -eps]) cube([BW - 2*end_wall, y1 - y0 - 2*wall, inner_h + eps]);
     // USB-C の口 (ﾌﾟﾗｸﾞの太い所も入るように)
     translate([usb_x, y0 - eps, hdr_h + pcb_t + usb_h/2]) rotate([-90, 0, 0])
       linear_extrude(wall + 1) offset(r = 2) square([12.6 - 4, 7.0 - 4], center = true);
     // LED の窓 (天面)
     translate([led[0], led[1], inner_h - eps]) cylinder(d = 2.2, h = roof + 1);
-    // ﾃｽﾄ線の出口 (右端) と刻印 (右端の面、上下は印刷向きで読める向き)
-    for (w = wires) {
-      translate([BW - wall - 1, w[0], wire_z]) rotate([0, 90, 0]) cylinder(d = wire_d, h = wall + 2);
-      translate([BW - 0.4, w[0], wire_z + 2.1]) rotate([90, 0, 90])
-        linear_extrude(1) mirror([1, 0, 0])
-          text(w[1], size = 2.1, halign = "center", valign = "bottom", font = "Liberation Sans:style=Bold");
+    // ﾊﾞﾅﾅｼﾞｬｯｸの穴 (左右の端) と、つばの座ぐり
+    for (j = jacks) {
+      xo = j[0] == 0 ? -1 : BW - end_wall - 1;
+      translate([xo, jack_y, jack_z]) rotate([0, 90, 0]) cylinder(d = jack_hole, h = end_wall + 2);
+      if (jack_flange > 0) {
+        xs = j[0] == 0 ? -1 : BW - jack_seat;
+        translate([xs, jack_y, jack_z]) rotate([0, 90, 0]) cylinder(d = jack_flange + 0.6, h = jack_seat + 1);
+      }
+      // 正面の刻印 (端寄り)。正面は y = BD の面
+      tx = j[0] == 0 ? 7.5 : BW - 7.5;
+      translate([tx, y1 + eps, jack_z]) rotate([90, 0, 0]) linear_extrude(0.5)
+        text(j[1], size = 3.2, halign = "center", valign = "center", font = "Liberation Sans:style=Bold");
     }
-    // 正面の細い溝 (Cap 風のﾗｲﾝ)
-    translate([6, y1 - 0.45, H * 0.45]) cube([BW - 12, 1, 0.6]);
+    // 正面の細い溝 (Cap 風のﾗｲﾝ)。刻印の間だけ
+    translate([14, y1 - 0.45, H * 0.45]) cube([BW - 28, 1, 0.6]);
     for (k = keepout) translate([k[0], k[2], -eps]) cube([k[1] - k[0], k[3] - k[2], H + 1]);
   }
 }
@@ -103,11 +114,11 @@ module inside() {
     translate([0, 0, zb]) cylinder(d = 6.0, h = inner_h - zb + eps);
     translate([0, 0, hdr_h + pcb_t]) peg();         // ﾋﾟﾝ先の位置は変えない
   }
-  // 線の抜け止め: 出口の手前に柱を千鳥に (線を S 字に通す)
-  for (p = [[BW - 7, 10.5], [BW - 11, 3.5], [BW - 11, 17.5]])
-    translate([p[0], p[1], 1.2]) cylinder(d = 2.6, h = inner_h - 1.2 + eps);
-  // 1kΩ と熱収縮の置き場の仕切り (低い壁、基板と配線を分ける)
-  translate([bx + PW + 2.5, y0 + wall, inner_h - 3.0]) cube([1.2, 5.5, 3.0 + eps]);
+  // 配線を天井側に留める小さなﾌｯｸ (基板の正面側の余白を通して左右へ)
+  for (x = [12, 24, 60, 72]) translate([x - 1.5, BD - wall - 3.2, inner_h - 3.0]) difference() {
+    cube([3, 3.2, 3.0 + eps]);
+    translate([-1, 0.8, -eps]) cube([5, 1.6, 2.0]);
+  }
 }
 
 module cap() {
@@ -121,11 +132,17 @@ module dummy() {
   color("green") translate([bx, 0, hdr_h]) cube([PW, PD, pcb_t]);
   color("silver") translate([usb_x - 4.47, usb_y0, hdr_h + pcb_t]) cube([8.94, 7.3, usb_h]);
   color("black") translate([bx + 2, 12.03 - 1.4, 0]) cube([18, 5.3, hdr_h]);
-  // ﾃｽﾄ線と抵抗
-  color("red")   translate([bx + 13.54, 14.57, hdr_h + pcb_t]) cylinder(d = 1.6, h = 2);
-  color("tan")   translate([bx + PW + 5, 14.5, 4.2]) rotate([0, 90, 0]) cylinder(d = 2.4, h = 6.5);
-  color("red")   translate([BW - 14, 15, wire_z]) rotate([0, 90, 0]) cylinder(d = 2.4, h = 20);
-  color("black") translate([BW - 14, 6, wire_z]) rotate([0, 90, 0]) cylinder(d = 2.4, h = 20);
+  // ﾊﾞﾅﾅｼﾞｬｯｸ (つば φ11 + 本体 φ6 x 16mm + ﾅｯﾄ) の見本
+  for (j = jacks) {
+    s_ = j[0] == 0 ? 1 : -1;  xw = j[0] == 0 ? 0 : BW;
+    translate([xw, jack_y, jack_z]) rotate([0, 90 * s_, 0]) {
+      color(j[0] == 0 ? "black" : "red") translate([0, 0, -10]) cylinder(d = 10.5, h = 10);   // 外に出る部分 (仮)
+      color(j[0] == 0 ? "black" : "red") cylinder(d = 8.8, h = end_wall);
+      color("gold") translate([0, 0, end_wall]) cylinder(d = 8.8, h = 13.7);                 // 長さ 25.7 の残り (仮)
+      color("silver") translate([0, 0, end_wall]) cylinder(d = 13.0, h = 2.5, $fn = 6);      // ﾅｯﾄ (仮 12mm 二面幅)
+    }
+  }
+  color("tan") translate([BW - 24, jack_y, jack_z]) rotate([0, 90, 0]) cylinder(d = 2.4, h = 6.5);
 }
 
 module fittest() {
