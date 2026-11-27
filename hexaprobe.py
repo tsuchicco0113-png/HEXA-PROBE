@@ -34,7 +34,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hp_backends as B  # noqa: E402
 
-VERSION = "0.2.2"
+VERSION = "0.2.3"
 LCD_W, LCD_H = 320, 170
 TOP_H, BOT_H = 18, 16
 BY0, BY1 = TOP_H + 2, LCD_H - BOT_H - 2          # 本文の上下
@@ -553,6 +553,11 @@ class SerialView(View):
                 self.app.say(ev[1], 3)
                 self.close()
                 return True
+            elif ev[0] == "hint":
+                self.box.add("--- " + ev[1] + " ---", REC)
+                self.log("# " + ev[1])
+                self.app.say(ev[1], 5)
+                dirty = True
         if time.time() - self.last_rx > 0.35:           # 改行の来ない行も出す
             if self.partial:
                 self.emit_text(self.partial)

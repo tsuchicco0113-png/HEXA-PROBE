@@ -180,10 +180,12 @@ class SerialReader(Worker):
         set_baud(self.fd, baud)
 
     def run(self):
+        zeros, zt0, warned = 0, time.time(), False
         while not self.stop_ev.is_set():
             r, _, _ = select.select([self.fd], [], [], 0.2)
             if not r:
                 continue
+            time.sleep(0.01)                 # 1 ﾊﾞｲﾄずつ起こされないよう、少しためてから読む
             try:
                 data = os.read(self.fd, 4096)
             except BlockingIOError:
@@ -195,6 +197,15 @@ class SerialReader(Worker):
                 time.sleep(0.05)
                 continue
             self.raw(data.hex(" "))
+            # 00 だけが大量に来る = RX が Low に張り付き (何もつながっていない / 電源が無い / 速度違い)
+            now = time.time()
+            if now - zt0 > 1.0:
+                zeros, zt0 = 0, now
+            if data.count(0) == len(data):
+                zeros += len(data)
+                if zeros > 500 and not warned:
+                    warned = True
+                    self.q.put(("hint", "00 ばかり届きます: RX が Low のまま (相手の電源・配線・GND・速度を確認)"))
             self.q.put(("data", data, time.time()))
 
     def set_baud(self, baud):
