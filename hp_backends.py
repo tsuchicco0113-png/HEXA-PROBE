@@ -549,14 +549,14 @@ class MidiReader(Worker):
 
 
 # ================================================================ I2C
-I2C_HINTS = {0x0D: "QMC5883 地磁気", 0x10: "VEML7700 光", 0x18: "LIS3DH 加速度", 0x19: "LIS3DH 加速度",
+I2C_HINTS = {0x0D: "QMC5883 地磁気", 0x10: "ES8389 音声 (本体) / VEML7700 光", 0x18: "LIS3DH 加速度", 0x19: "LIS3DH 加速度",
              0x1E: "HMC5883 地磁気", 0x20: "PCF8574/MCP23017 IO", 0x23: "BH1750 光",
              0x26: "Unit ?", 0x27: "PCF8574 LCD", 0x29: "VL53L0X/L1X 距離 / TCS34725 色",
              0x34: "TCA8418 キー (本体)", 0x38: "AHT20 温湿度 / FT6336 タッチ", 0x39: "APDS9960 / TSL2561",
              0x3C: "SSD1306 OLED", 0x3D: "SSD1306 OLED", 0x40: "INA219 電流 / HDC1080 / PCA9685",
              0x41: "INA219 電流", 0x42: "GPS (u-blox)", 0x44: "SHT3x/SHT4x 温湿度 (ENV)", 0x45: "SHT3x 温湿度",
              0x48: "ADS1115 ADC / TMP102", 0x49: "ADS1115 ADC", 0x4A: "ADS1115", 0x4B: "ADS1115",
-             0x32: "RX8130 RTC (本体)", 0x51: "BM8563 RTC", 0x52: "VL53L4 / Nunchuk", 0x53: "ADXL345 加速度", 0x55: "BQ27220 電池 (本体)",
+             0x32: "RX8130 RTC (本体)", 0x51: "BM8563 RTC", 0x52: "VL53L4 / Nunchuk", 0x53: "ADXL345 加速度", 0x55: "BQ27220 電池 (本体)", 0x4F: "M5IOE1 IO拡張 (本体)",
              0x57: "MAX30102 / EEPROM", 0x58: "SGP30 空気", 0x59: "SGP40 空気", 0x5A: "MLX90614 温度 / CCS811",
              0x5B: "CCS811", 0x5C: "AM2320 温湿度", 0x60: "Si5351 / MCP4725 DAC", 0x61: "SCD30 CO2",
              0x62: "SCD40 CO2", 0x68: "BMI270 IMU (本体) / MPU6886 / DS3231", 0x69: "BMI270 IMU",

@@ -34,7 +34,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hp_backends as B  # noqa: E402
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 LCD_W, LCD_H = 320, 170
 TOP_H, BOT_H = 18, 16
 BY0, BY1 = TOP_H + 2, LCD_H - BOT_H - 2          # 本文の上下
@@ -421,6 +421,10 @@ class View:
     def status(self):
         return ""
 
+    def snapshot(self):
+        """記録を始めた時点で画面に出ている物 (L の前に見つかった分もﾛｸﾞに残す)"""
+        return []
+
     def help(self):
         return "ESC:戻る"
 
@@ -434,6 +438,13 @@ class View:
         path = os.path.join(LOGDIR, f"{self.key}-{time.strftime('%Y%m%d-%H%M%S')}.log")
         self.rec = open(path, "a", encoding="utf-8", errors="replace")
         self.rec.write(f"# HEXA PROBE {VERSION} {self.name} {self.status()}\n")
+        try:
+            snap = self.snapshot()
+        except Exception as e:                   # 記録は止めない
+            snap = [f"(開始時点の一覧を書けません: {safe_repr(e)})"]
+        for line in snap:
+            self.rec.write(f"# {line}\n")
+        self.rec.flush()
         self.app.say("記録中: " + path.replace(os.path.expanduser("~"), "~"), 3)
 
     def log(self, text):
@@ -707,6 +718,13 @@ class BleView(View):
 
     def status(self):
         return f"{len(self.devs)}台  {self.state}"
+
+    def snapshot(self):
+        out = ["開始時点の機器 (強い順):"]
+        for a in self.order:
+            dv = self.devs[a]
+            out.append(f"  {a}  rssi={dv['rssi']}  {dv['name'] or ''}  mfr={dv.get('mfr') or ''}")
+        return out
 
     def help(self):
         if self.detail:
@@ -1167,6 +1185,12 @@ class I2cView(View):
     def status(self):
         auto = "自動" if (self.worker and self.worker.auto) else "手動"
         return f"i2c-{self.bus}  {len(self.found)}個  {auto}" if self.bus is not None else ""
+
+    def snapshot(self):
+        out = [f"開始時点の i2c-{self.bus} (UU = ﾄﾞﾗｲﾊﾞが使用中):"]
+        for a in sorted(self.found):
+            out.append(f"  0x{a:02X} {self.found[a]}  {B.I2C_HINTS.get(a, '')}")
+        return out
 
     def help(self):
         return "方向:選ぶ B:本体を記録 G:Grove切替 TAB:バス SPC:自動 R:再 L:記録"
