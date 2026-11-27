@@ -117,7 +117,8 @@ USB_CHIPS = {"10c4": "CP210x", "1a86": "CH340/CH9102", "0403": "FTDI", "303a": "
 def set_raw(fd):
     a = termios.tcgetattr(fd)
     a[0] = a[1] = a[3] = 0
-    a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+    # 速度のﾋﾞｯﾄは残す (0 にすると B0 = 回線切断の扱いになり、DTR/RTS が一瞬落ちる)
+    a[2] = (a[2] & (termios.CBAUD | getattr(termios, "CBAUDEX", 0))) | termios.CS8 | termios.CREAD | termios.CLOCAL
     a[6][termios.VMIN] = 0
     a[6][termios.VTIME] = 0
     termios.tcsetattr(fd, termios.TCSANOW, a)
@@ -235,6 +236,9 @@ class SerialReader(Worker):
         fcntl.ioctl(self.fd, TIOCMBIS, struct.pack("I", TIOCM_RTS))
         time.sleep(0.12)
         fcntl.ioctl(self.fd, TIOCMBIC, struct.pack("I", TIOCM_RTS))
+        # 起動の向き (IO0) が決まった後で DTR を戻す。DTR が落ちたままだと、送ってこない USB 機器がある
+        time.sleep(0.05)
+        fcntl.ioctl(self.fd, TIOCMBIS, struct.pack("I", TIOCM_DTR))
 
     def close(self):
         try:
