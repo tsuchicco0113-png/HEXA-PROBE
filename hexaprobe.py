@@ -34,7 +34,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hp_backends as B  # noqa: E402
 
-VERSION = "0.2.6"
+VERSION = "0.2.7"
 LCD_W, LCD_H = 320, 170
 TOP_H, BOT_H = 18, 16
 BY0, BY1 = TOP_H + 2, LCD_H - BOT_H - 2          # 本文の上下
@@ -479,6 +479,9 @@ class SerialView(View):
         self.nbytes = 0
         self.rate = collections.deque(maxlen=50)
         self.port = None
+        self.path = None
+        self.lost = 0.0          # 切断された時刻 (0 = 切断していない)。同じ口が戻ったらつなぎ直す
+        self.retry = 0.0
 
     def enter(self):
         self.pick.set(B.list_serial_ports())
@@ -494,7 +497,7 @@ class SerialView(View):
         except OSError as e:
             self.app.say(f"開けません: {e.strerror or e}", 4)
             return
-        self.port = name
+        self.port, self.path, self.lost = name, path, 0.0
         self.box.clear()
         self.nbytes = 0
         self.partial = self.hexrow = b""
@@ -540,18 +543,38 @@ class SerialView(View):
         self.box.add(f"{hx:<24}  {asc}", CYAN)
         self.log(hx)
 
+    def reconnect(self):
+        """USB の口が抜けた (ESP32-S3 のﾘｾｯﾄ等) → 同じ名前で戻ってきたら開き直す。30秒まで待つ"""
+        now = time.time()
+        if now - self.lost > 30:
+            self.lost = 0.0
+            self.box.add("--- 戻ってきませんでした (ESC で選び直し) ---", REC)
+            return True
+        if now - self.retry < 0.4 or not self.path or self.app.sim or not os.path.exists(self.path):
+            return False
+        self.retry = now
+        try:
+            self.reader = self.app.backend("SerialReader")(self.path, self.baud).start()
+        except OSError:
+            return False
+        self.lost = 0.0
+        self.box.add(f"--- つなぎ直しました {self.port} {self.baud}bps ---", ACC)
+        self.log(f"reopen {self.path}")
+        return True
+
     def tick(self):
         if not self.reader:
-            return False
+            return self.reconnect() if (self.port and self.lost) else False
         dirty = False
         for ev in self.reader.events():
             if ev[0] == "data":
                 self.feed(ev[1], time.time())
                 dirty = True
             elif ev[0] == "error":
-                self.box.add("--- " + ev[1] + " ---", REC)
+                self.box.add("--- " + ev[1] + " (戻ったら自動でつなぎ直します) ---", REC)
                 self.app.say(ev[1], 3)
                 self.close()
+                self.lost = time.time()
                 return True
             elif ev[0] == "hint":
                 self.box.add("--- " + ev[1] + " ---", REC)
@@ -602,7 +625,7 @@ class SerialView(View):
             return None
         if val == "ESC":
             self.close()
-            self.port = None
+            self.port, self.lost = None, 0.0
             self.enter()
         elif val == "b":
             self.baud = BAUDS[(BAUDS.index(self.baud) + 1) % len(BAUDS)] if self.baud in BAUDS else BAUDS[0]
