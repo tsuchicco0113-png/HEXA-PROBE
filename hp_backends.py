@@ -27,6 +27,7 @@ import threading
 import time
 
 DIR = os.path.dirname(os.path.abspath(__file__))
+RAW_DIR = None                  # デバッグ時に画面側が入れる。入っていれば各 Worker が生データを残す
 
 
 def read_text(path):
@@ -38,10 +39,28 @@ def read_text(path):
 
 
 class Worker:
+    kind = "worker"
+
     def __init__(self):
         self.q = queue.Queue()
         self.stop_ev = threading.Event()
         self.th = None
+        self._raw = None
+
+    def raw(self, text):
+        """デバッグ時だけ: 受け取ったものを加工前のまま raw-<種類>-日時.log へ"""
+        if RAW_DIR is None:
+            return
+        try:
+            if self._raw is None:
+                os.makedirs(RAW_DIR, exist_ok=True)
+                path = os.path.join(RAW_DIR, f"raw-{self.kind}-{time.strftime('%Y%m%d-%H%M%S')}.log")
+                self._raw = open(path, "a", encoding="utf-8", errors="replace")
+            t = time.time()
+            self._raw.write(time.strftime("%H:%M:%S", time.localtime(t)) + f".{int(t * 1000) % 1000:03d} {text}\n")
+            self._raw.flush()
+        except OSError:
+            pass
 
     def start(self):
         self.th = threading.Thread(target=self._run_safe, daemon=True)
@@ -74,6 +93,12 @@ class Worker:
             pass
         if self.th and self.th is not threading.current_thread():
             self.th.join(timeout=1.5)
+        if self._raw:
+            try:
+                self._raw.close()
+            except OSError:
+                pass
+            self._raw = None
 
     def close(self):
         pass
@@ -145,6 +170,8 @@ def list_serial_ports():
 
 
 class SerialReader(Worker):
+    kind = "serial"
+
     def __init__(self, path, baud):
         super().__init__()
         self.path, self.baud = path, baud
@@ -167,6 +194,7 @@ class SerialReader(Worker):
             if not data:
                 time.sleep(0.05)
                 continue
+            self.raw(data.hex(" "))
             self.q.put(("data", data, time.time()))
 
     def set_baud(self, baud):
@@ -216,6 +244,8 @@ def bt_state():
 
 
 class BleScanner(Worker):
+    kind = "ble"
+
     def run(self):
         if not shutil.which("bluetoothctl"):
             raise RuntimeError("bluetoothctl がありません (sudo apt install bluez)")
@@ -243,7 +273,11 @@ class BleScanner(Worker):
             parts = re.split(rb"\r?\n|\r", buf)
             buf = parts.pop()
             for ln in parts:
-                self.parse(ln.decode("utf-8", "replace"))
+                txt = ln.decode("utf-8", "replace")
+                if not txt.strip():
+                    continue
+                self.raw(repr(txt))                       # 形式がずれた時のために、そのまま残す
+                self.parse(txt)
 
     def send(self, cmd):
         try:
@@ -272,6 +306,7 @@ class BleScanner(Worker):
             self.q.put(("dev", addr, "del", ""))
         elif ":" in rest:
             key, val = [x.strip() for x in rest.split(":", 1)]
+            key = key.replace(".", " ")                  # BlueZ 新しめ: ManufacturerData.Key
             if key == "RSSI":
                 n = re.search(r"\((-?\d+)\)", val) or re.search(r"(-?\d+)", val)
                 if n:
@@ -341,6 +376,8 @@ def nfc_python():
 
 
 class NfcWorker(Worker):
+    kind = "nfc"
+
     def run(self):
         self.q.put(("status", "nfcpy を準備中…"))
         py = nfc_python()
@@ -352,6 +389,7 @@ class NfcWorker(Worker):
             if self.stop_ev.is_set():
                 break
             line = line.strip()
+            self.raw(line)
             try:
                 ev = json.loads(line)
             except ValueError:
@@ -473,6 +511,8 @@ def list_midi_sources():
 
 
 class MidiReader(Worker):
+    kind = "midi"
+
     def __init__(self, src):
         super().__init__()
         kind, path = src
@@ -497,6 +537,7 @@ class MidiReader(Worker):
                 self.q.put(("error", "切断されました"))
                 return
             t = time.time()
+            self.raw(data.hex(" "))
             for msg in self.parser.feed(data):
                 self.q.put(("msg", msg, t))
 
@@ -527,11 +568,13 @@ def list_i2c_buses():
     return sorted(int(p.rsplit("-", 1)[1]) for p in glob.glob("/dev/i2c-*") if p.rsplit("-", 1)[1].isdigit())
 
 
-def i2c_scan(bus):
+def i2c_scan(bus, raw=None):
     """i2cdetect の自動モード (アドレスに応じて quick write / read) で探す"""
     if not shutil.which("i2cdetect"):
         raise RuntimeError("i2cdetect がありません (sudo apt install i2c-tools)")
     p = subprocess.run(["i2cdetect", "-y", str(bus)], capture_output=True, text=True, timeout=10)
+    if raw:
+        raw(f"i2cdetect -y {bus} rc={p.returncode}\n{p.stdout}{p.stderr}")
     if p.returncode != 0:
         msg = (p.stderr or p.stdout).strip().splitlines()
         raise RuntimeError(msg[-1] if msg else f"i2cdetect が失敗 ({p.returncode})")
@@ -589,6 +632,8 @@ def restore_grove(orig):
 
 
 class I2cScanner(Worker):
+    kind = "i2c"
+
     def __init__(self, bus, interval=2.0):
         super().__init__()
         self.bus, self.interval = bus, interval
@@ -598,7 +643,7 @@ class I2cScanner(Worker):
     def run(self):
         while not self.stop_ev.is_set():
             try:
-                self.q.put(("scan", self.bus, i2c_scan(self.bus), time.time()))
+                self.q.put(("scan", self.bus, i2c_scan(self.bus, raw=self.raw), time.time()))
             except Exception as e:
                 self.q.put(("error", str(e)))
             self.kick.wait(self.interval if self.auto else 3600)
@@ -621,6 +666,7 @@ def ir_device():
 
 
 class IrReader(Worker):
+    kind = "ir"
     GAP = 12000                    # µs 以上の空白でフレームの区切り
 
     def __init__(self, dev):
@@ -646,6 +692,8 @@ class IrReader(Worker):
                 self.q.put(("error", "受信機が読めなくなりました"))
                 return
             n = len(buf) // 4
+            if RAW_DIR is not None:
+                self.raw(" ".join(f"{v:08X}" for (v,) in struct.iter_unpack("<I", buf[:n * 4])))
             for (v,) in struct.iter_unpack("<I", buf[:n * 4]):
                 typ, val = v & 0xFF000000, v & 0x00FFFFFF
                 if typ == LIRC_PULSE:

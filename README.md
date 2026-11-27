@@ -1,4 +1,4 @@
-# HEXA PROBE v0.1
+# HEXA PROBE v0.1.1
 
 CardputerZero 用の「なんでも覗く」ﾂｰﾙ。ﾊﾆｶﾑのﾎｰﾑから 6 つの覗き窓を選ぶ。
 画面の作りは HEXA CLIP / HEXA POWER と同じ流儀 (強調色は紫)。
@@ -26,6 +26,21 @@ sudo reboot                              # 初回だけ (ｱｲｺﾝと権限�
 共通: **L = ﾛｸﾞ記録** (`~/hexaprobe-logs/<種類>-日時.log`、上のﾊﾞｰに ●REC)、SPACE 止める、↑↓ 遡る/選ぶ、BS 消去、ESC 戻る。
 方向は F(↑) X(↓) Z(←) C(→)。ﾎｰﾑでは 1〜6 で直接開く。
 
+## 実機ﾃｽﾄの回し方 (v0.1.1〜)
+1. `hexaprobe --probe` … 各機能の準備状況に加えて、当たり外れのある環境 (ｸﾞﾙｰﾌﾟ / `pinctrl get 4` / gpio-ir / bluetoothctl の版) を表示
+2. ﾎｰﾑで **D** → ﾃﾞﾊﾞｯｸﾞ ON (上のﾊﾞｰに DBG。次の起動でも ON のまま、もう一度 D で OFF)
+3. 各機能を順に開く (L で整形済みのﾛｸﾞも)
+4. `~/hexaprobe-logs/` を持ち帰る
+   - `raw-<種類>-日時.log` … 加工前の生ﾃﾞｰﾀ (BLE は bluetoothctl の行そのまま、I2C は i2cdetect の出力、ｼﾘｱﾙ/MIDI/IR はﾊﾞｲﾄ列)
+   - `<種類>-日時.log` … L で取った整形済みﾛｸﾞ
+   - `crash-<種類>-日時.log` … 落ちた時の報告
+
+## 落ちた時
+- 描画・ｷｰ操作・開く時に例外が出ると、**その画面だけ止めて**ｴﾗｰ表示 (ESC でﾎｰﾑへ、他の機能は使える)
+- REC 中なら、ﾛｸﾞの最後に「!! 落ちました」を書いて**閉じて保存**してから止める。機器 (ﾎﾟｰﾄ/ｽｷｬﾝ) も手放す
+- 報告 (traceback ＋ 落ちた所の変数の repr ＋ 画面の状態) を `crash-*.log` と `~/.local/share/hexaprobe/app.log` に残す
+- ﾃﾞｰﾀ取り込み (tick) のｴﾗｰは一時的なことが多いので画面は続ける。同じｴﾗｰは最初の1回だけ記録、30回続いたら止める
+
 ## 使い方のｺﾂ
 - **I2C で Unit を調べる**: 何も挿さずに B (本体を記録) → Unit を挿す → 増えたｱﾄﾞﾚｽが紫の NEW で光る。記録は `~/.config/hexaprobe/i2c-base-<bus>.json`
 - **Grove は初期 UART**: I2C の Unit は G で I2C に切り替える (GPIO4)。I2C 画面を抜けると元に戻す。Grove の 5V は 設定 > ExtPort で ON
@@ -36,12 +51,13 @@ sudo reboot                              # 初回だけ (ｱｲｺﾝと権限�
 - `hexaprobe.py` … 画面とｷｰ (一般ﾕｰｻﾞｰで動く)
 - `hp_backends.py` … 取り込み部。どれも別ｽﾚｯﾄﾞでｲﾍﾞﾝﾄを積む
   - SERIAL: termios2 (BOTHER) で任意の速度。31250 / 74880 もそのまま
-  - BLE: `bluetoothctl` を pty で動かして `[NEW]/[CHG]` を読む
+  - BLE: `bluetoothctl` を pty で動かして `[NEW]/[CHG]` を読む (`ManufacturerData Key` と `.Key` の両方の書き方に対応)
   - NFC: `hp_nfc_helper.py` を nfcpy の python で別ﾌﾟﾛｾｽ実行 (JSON 1行ずつ)
   - MIDI: `/dev/snd/midiC*D*` (rawmidi) か `/dev/serial0` を自前でﾊﾟｰｽ (ﾗﾝﾆﾝｸﾞｽﾃｰﾀｽ/SysEx/ﾘｱﾙﾀｲﾑ)
   - I2C: `i2cdetect -y` (自動ﾓｰﾄﾞ) を定期実行。Grove 切替は `pinctrl set 4`
   - IR: `/dev/lirc0` の mode2 (µs のﾊﾟﾙｽ列) を読んで解読
 - `hexaprobe --sim OUT` … PC 用。偽のﾃﾞｰﾀで全画面を PNG に保存
+- `hexaprobe --debug` … ﾃﾞﾊﾞｯｸﾞ ON で起動 (`~/.config/hexaprobe/debug` があっても ON)
 
 ## 実機で確かめること
 - BLE: `bluetoothctl` の出力形式 (RSSI の書き方) が読めるか、BT が OFF だと案内が出るか

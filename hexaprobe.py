@@ -34,7 +34,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hp_backends as B  # noqa: E402
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 LCD_W, LCD_H = 320, 170
 TOP_H, BOT_H = 18, 16
 BY0, BY1 = TOP_H + 2, LCD_H - BOT_H - 2          # 本文の上下
@@ -48,6 +48,8 @@ YEL = (255, 214, 90)
 CYAN = (90, 220, 240)
 LOGDIR = os.path.expanduser("~/hexaprobe-logs")
 CFGDIR = os.path.expanduser("~/.config/hexaprobe")
+DEBUG_FLAG = os.path.join(CFGDIR, "debug")       # これがあれば起動時からデバッグ (生ログ) ON
+APPDIR = os.path.dirname(os.path.abspath(__file__))
 
 MODS = [  # key, 六角形の名前, 説明
     ("serial", "SERIAL", "USBシリアル・Grove UART"),
@@ -66,7 +68,7 @@ K_ESC, K_BS, K_TAB, K_ENTER, K_SPACE = 1, 14, 15, 28, 57
 K_UP, K_LEFT, K_RIGHT, K_DOWN = 103, 105, 106, 108
 DIGITS = {2: "1", 3: "2", 4: "3", 5: "4", 6: "5", 7: "6", 8: "7", 9: "8", 10: "9", 11: "0"}
 LETTERS = {33: "f", 45: "x", 44: "z", 46: "c", 19: "r", 16: "q", 31: "s", 38: "l", 35: "h", 48: "b",
-           34: "g", 20: "t", 18: "e"}
+           34: "g", 20: "t", 18: "e", 32: "d"}
 ACTIONS = {K_UP: "UP", K_DOWN: "DOWN", K_LEFT: "LEFT", K_RIGHT: "RIGHT", K_TAB: "TAB",
            K_ENTER: "ENTER", K_ESC: "ESC", K_BS: "BS", K_SPACE: "SPACE"}
 LETTER_NAV = {"f": "UP", "x": "DOWN", "z": "LEFT", "c": "RIGHT"}
@@ -262,6 +264,45 @@ def ago(t):
     return f"{s:.0f}秒前" if s < 60 else f"{s / 60:.0f}分前"
 
 
+# ================================================================ 落ちた時の記録
+def safe_repr(v, n=400):
+    try:
+        r = repr(v)
+    except Exception as e:
+        r = f"<repr 失敗 {type(v).__name__}: {e}>"
+    return r if len(r) <= n else r[:n] + f"…(+{len(r) - n})"
+
+
+def crash_report(phase, view, e):
+    """traceback + 落ちた所の変数 (repr) + 画面の状態。app.log と crash-*.log に残す"""
+    import traceback
+    name = view.name if view else "HOME"
+    out = [f"=== HEXA PROBE {VERSION} crash {time.strftime('%F %T')} phase={phase} view={name}",
+           "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()]
+    frames, tb = [], e.__traceback__
+    while tb:
+        frames.append((tb.tb_frame, tb.tb_lineno))
+        tb = tb.tb_next
+    shown = 0
+    for fr, line in reversed(frames):                 # 落ちた所から外側へ、自分のコードだけ
+        if not fr.f_code.co_filename.startswith(APPDIR) or shown >= 3:
+            continue
+        shown += 1
+        out.append(f"--- locals {fr.f_code.co_name} ({os.path.basename(fr.f_code.co_filename)}:{line})")
+        for k, v in fr.f_locals.items():
+            if k in ("self", "app", "d", "img") or k.startswith("__"):
+                continue
+            out.append(f"  {k} = {safe_repr(v, 1000)}")
+    if view is not None:
+        out.append("--- view state")
+        for k, v in vars(view).items():
+            if isinstance(v, (str, int, float, bool, type(None), tuple, list, dict, set)):
+                out.append(f"  {k} = {safe_repr(v, 3000)}")
+            elif isinstance(v, LogBox):
+                out.append(f"  {k}: 最後の行 = {safe_repr([t for t, _ in list(v.lines)[-5:]], 600)}")
+    return "\n".join(out)
+
+
 # ================================================================ 部品
 class LogBox:
     """流れるログ。back=0 で最新を表示、hold で止める (止めている間も裏では貯まる)"""
@@ -358,6 +399,8 @@ class View:
     def __init__(self, app):
         self.app = app
         self.rec = None
+        self.broken = None          # 落ちた時の (メッセージ, 保存先)
+        self.errors = {}            # tick のエラー: 文 → 回数
 
     def enter(self):
         pass
@@ -1368,8 +1411,9 @@ class App:
     HEX_R = 25
     POS = [(27, 48), (74, 48), (121, 48), (50, 86), (97, 86), (144, 86)]
 
-    def __init__(self, fb, keys, sim=False, backends=None):
+    def __init__(self, fb, keys, sim=False, backends=None, debug=False):
         self.fb, self.keys, self.sim = fb, keys, sim
+        self.set_debug(debug, save=False)
         self.backends = backends or {}
         self.font = find_font(14)
         self.font_s = find_font(12)
@@ -1415,7 +1459,13 @@ class App:
         if time.time() < self.next_det:
             return False
         self.next_det = time.time() + 3
-        new = self.backends["detect_all"]() if "detect_all" in self.backends else B.detect_all()
+        try:
+            new = self.backends["detect_all"]() if "detect_all" in self.backends else B.detect_all()
+        except Exception as e:
+            if not getattr(self, "_det_err", False):          # 同じ失敗を毎回書かない
+                self._det_err = True
+                print(crash_report("detect", None, e), file=sys.stderr, flush=True)
+            return False
         changed = new != self.det
         self.det = new
         return changed
@@ -1478,8 +1528,79 @@ class App:
             img = self.draw_home()
         else:
             img = Image.new("RGB", (LCD_W, LCD_H), BG)
-            self.view.draw(img, ImageDraw.Draw(img))
+            if not self.view.broken:
+                try:
+                    self.view.draw(img, ImageDraw.Draw(img))
+                except Exception as e:
+                    self.crash("draw", e)
+                    img = Image.new("RGB", (LCD_W, LCD_H), BG)
+            if self.view.broken:
+                self.draw_broken(img)
         return self.chrome(img)
+
+    # ---- 落ちた時: 記録中のログを閉じて保存 → 報告を app.log と crash-*.log へ → その画面だけ止める
+    def crash(self, phase, e):
+        v = self.view
+        rep = crash_report(phase, v, e)
+        print(rep, file=sys.stderr, flush=True)
+        path = None
+        try:
+            os.makedirs(LOGDIR, exist_ok=True)
+            path = os.path.join(LOGDIR, f"crash-{v.key if v else 'home'}-{time.strftime('%Y%m%d-%H%M%S')}.log")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(rep + "\n")
+        except OSError:
+            path = None
+        if v is not None:
+            if v.rec:
+                v.log(f"!! {phase} で落ちました: {type(e).__name__}: {e}")
+                if path:
+                    v.log(f"!! 詳しくは {path}")
+            try:
+                v.leave()                                    # ログを閉じて保存、機器も手放す
+            except Exception as e2:
+                print("leave failed:", e2, file=sys.stderr, flush=True)
+            v.broken = (f"{type(e).__name__}: {e}", path)
+        self.say("エラーで止めました。ログは保存済み", 4)
+
+    def draw_broken(self, img):
+        d = ImageDraw.Draw(img)
+        msg, path = self.view.broken
+        d.rounded_rectangle((6, BY0 + 2, LCD_W - 6, BY1 - 2), 8, fill=(40, 18, 24), outline=REC, width=2)
+        d.text((16, BY0 + 8), "この画面でエラーが起きました", fill=REC, font=self.font)
+        self.fit(d, (16, BY0 + 30), msg, LCD_W - 32, self.font_t, FG)
+        d.text((16, BY0 + 50), "記録中のログは閉じて保存しました", fill=SUB, font=self.font_t)
+        if path:
+            self.fit(d, (16, BY0 + 64), path.replace(os.path.expanduser("~"), "~"), LCD_W - 32, self.font_t, YEL)
+        d.text((16, BY0 + 78), "詳細: ~/.local/share/hexaprobe/app.log", fill=SUB, font=self.font_t)
+        d.text((16, BY0 + 92), "ESC でホームへ (他の機能は使えます)", fill=FG, font=self.font_s)
+
+    def tick_error(self, e):
+        """tick のエラーは一時的なことが多いので画面は続ける。同じ文は最初の1回だけ記録、30回で止める"""
+        v = self.view
+        k = f"{type(e).__name__}: {e}"
+        n = v.errors.get(k, 0) + 1
+        v.errors[k] = n
+        if n == 1:
+            print(crash_report("tick", v, e), file=sys.stderr, flush=True)
+            v.log(f"!! tick エラー: {k}")
+            self.say(f"エラー: {e}", 4)
+        if n >= 30:
+            self.crash("tick (30回)", e)
+
+    # ---- デバッグ (生ログ)
+    def set_debug(self, on, save=True):
+        self.debug = on
+        B.RAW_DIR = LOGDIR if on else None
+        if save and not self.sim:
+            try:
+                if on:
+                    os.makedirs(CFGDIR, exist_ok=True)
+                    open(DEBUG_FLAG, "w").close()
+                elif os.path.exists(DEBUG_FLAG):
+                    os.remove(DEBUG_FLAG)
+            except OSError:
+                pass
 
     def chrome(self, img):
         d = ImageDraw.Draw(img)
@@ -1491,10 +1612,18 @@ class App:
             d.ellipse((x, 5, x + 7, 12), fill=REC)
             d.text((x + 10, 3), "REC", fill=REC, font=self.font_t)
             x += 36
-        st = self.view.status() if self.view else "ENTER で開く"
+        if self.debug:
+            d.text((x, 3), "DBG", fill=YEL, font=self.font_t)
+            x += 26
+        st = (self.view.status() if not self.view.broken else "停止") if self.view else "ENTER で開く"
         self.fit(d, (max(x, LCD_W - 4 - self.font_t.getlength(st)), 3), st, LCD_W - 4 - x, self.font_t, SUB)
         d.rectangle((0, LCD_H - BOT_H, LCD_W, LCD_H), fill=(0, 0, 0))
-        hp = self.view.help() if self.view else "FXZC:選ぶ 1-6:直接 ENTER:開く ESC:終了"
+        if self.view is None:
+            hp = "FXZC:選ぶ 1-6:直接 ENTER:開く D:デバッグ ESC:終了"
+        elif self.view.broken:
+            hp = "ESC:ホームへ"
+        else:
+            hp = self.view.help()
         self.fit(d, (4, LCD_H - BOT_H + 2), hp, LCD_W - 8, self.font_t, (210, 210, 210))
         msg, until = self.toast
         if msg and time.time() < until:
@@ -1528,7 +1657,7 @@ class App:
         try:
             self.view.enter()
         except Exception as e:
-            self.say(f"開けません: {e}", 4)
+            self.crash("enter", e)
 
     def close_view(self):
         try:
@@ -1545,13 +1674,12 @@ class App:
             while True:
                 if self.view is None:
                     dirty |= self.detect()
-                else:
+                elif not self.view.broken:
                     try:
                         dirty |= bool(self.view.tick())
                     except Exception as e:
-                        import traceback
-                        traceback.print_exc()
-                        self.say(f"エラー: {e}", 4)
+                        self.tick_error(e)
+                        dirty = True
                 now = time.time()
                 toast_on = self.toast[1] > now - 0.5
                 if (dirty or toast_on) and now - last_draw > 0.12:
@@ -1560,8 +1688,15 @@ class App:
                 for kind, val in self.keys.poll(0.05):
                     dirty = True
                     if self.view is not None:
-                        if self.view.on_key(kind, val) == "back":
-                            self.close_view()
+                        if self.view.broken:
+                            if val == "ESC":
+                                self.close_view()
+                            continue
+                        try:
+                            if self.view.on_key(kind, val) == "back":
+                                self.close_view()
+                        except Exception as e:
+                            self.crash(f"key {val}", e)
                         continue
                     if val == "ESC":
                         if self.confirm_quit(self.frame()):
@@ -1573,6 +1708,10 @@ class App:
                     elif kind == "CHAR" and val in "123456":
                         self.sel = int(val) - 1
                         self.open_view(self.sel)
+                    elif kind == "CHAR" and val == "d":
+                        self.set_debug(not self.debug)
+                        self.say("デバッグ ON: 生データを ~/hexaprobe-logs/raw-*.log に残します" if self.debug
+                                 else "デバッグ OFF", 4)
                     elif kind == "CHAR" and val == "q":
                         return "q"
         finally:
@@ -1638,8 +1777,9 @@ class SimKeys:
             else:
                 out.append(ev)
                 break
-        if not self.script and not out:
-            out.append(("CHAR", "q"))
+        if not self.script and not out:                 # 台本が終わったら、機能画面なら戻ってから終了
+            app = self.app_ref[0]
+            out.append(("ACT", "ESC") if app and app.view else ("CHAR", "q"))
         return out
 
     def flush(self, sec=0):
@@ -1693,11 +1833,40 @@ def run_sim(outdir):
 
 # ================================================================ main
 def probe():
-    print(f"HEXA PROBE {VERSION}")
+    """実機で白黒をつける: 各機能の準備状況 + 当たり外れのある環境 (権限 / pinctrl / gpio-ir / bluez)"""
+    import shutil
+    import subprocess
+
+    def sh(cmd):
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            return (p.returncode, (p.stdout + p.stderr).strip())
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return (-1, str(e))
+    print(f"HEXA PROBE {VERSION}  python {sys.version.split()[0]}")
+    print("debug:", "ON" if os.path.exists(DEBUG_FLAG) else "OFF", f"({DEBUG_FLAG})")
     for k, (lab, ok, lines) in B.detect_all().items():
         print(f"[{'OK' if ok else '--'}] {k:6} {lab}")
         for ln in lines:
             print("         " + ln)
+    print("\n--- 環境")
+    groups = sh(["id", "-nG"])[1].split()
+    need = ["video", "input", "i2c", "dialout", "gpio", "plugdev", "bluetooth"]
+    print("groups:", " ".join(g if g in groups else f"[{g} なし]" for g in need))
+    rc, out = sh(["pinctrl", "get", "4"]) if shutil.which("pinctrl") else (-1, "pinctrl がありません")
+    print(f"pinctrl get 4 (sudo なし): rc={rc}  {out}")
+    print("grove_mode():", B.grove_mode())
+    print("lirc:", B.ir_device() or "なし",
+          "/", " ".join(sorted(os.listdir("/sys/class/rc"))) if os.path.isdir("/sys/class/rc") else "rc なし")
+    for cfg in ("/boot/firmware/config.txt", "/boot/config.txt"):
+        if os.path.exists(cfg):
+            lines = [ln.strip() for ln in open(cfg) if "gpio-ir" in ln]
+            print(f"{cfg}: {lines or 'gpio-ir の行なし'}")
+            break
+    print("bluetoothctl:", sh(["bluetoothctl", "--version"])[1] if shutil.which("bluetoothctl") else "なし")
+    print("bt_state (ある, ON):", B.bt_state())
+    print("i2cdetect:", shutil.which("i2cdetect") or "なし", " buses:", B.list_i2c_buses())
+    print("serial0:", os.path.realpath("/dev/serial0") if os.path.exists("/dev/serial0") else "なし")
     print("nfcpy:", B.nfc_python() or "なし")
 
 
@@ -1707,6 +1876,7 @@ def main():
     ap.add_argument("--sim", metavar="OUTDIR")
     ap.add_argument("--no-pause", action="store_true", help="ランチャーを一時停止しない")
     ap.add_argument("--check-font", action="store_true")
+    ap.add_argument("--debug", action="store_true", help="生データを ~/hexaprobe-logs/raw-*.log に残す")
     a = ap.parse_args()
     if a.check_font:
         find_font(12)
@@ -1727,7 +1897,7 @@ def main():
     reason = "unknown"
     try:
         print(f"HEXA PROBE {VERSION}", flush=True)
-        reason = App(fb, keys).run()
+        reason = App(fb, keys, debug=a.debug or os.path.exists(DEBUG_FLAG)).run()
     except KeyboardInterrupt:
         reason = "Ctrl+C"
     except Exception:
