@@ -60,13 +60,13 @@ module rbox(x0, x1, y0, y1, z0, h) {
 
 mid = [42 - mid_w/2, 42 + mid_w/2];
 
-module outer() {
+module outer(sk = skirt) {
   rbox(x_l, x_r, y_out, D, 0, H);
   rbox(mid[0], mid[1], D - 4, BD, 0, H);
   // すそ: 背面に沿って下がる板 (本体背面に密着、y_out〜0)
-  hull() for (x = [x_l + r_side, x_r - r_side]) {
-    translate([x, y_out + r_side, -skirt]) cylinder(r = r_side, h = skirt + 1);
-    translate([x, -eps, -skirt]) cube([eps, eps, skirt + 1]);
+  if (sk > 0) hull() for (x = [x_l + r_side, x_r - r_side]) {
+    translate([x, y_out + r_side, -sk]) cylinder(r = r_side, h = sk + 1);
+    translate([x, -eps, -sk]) cube([eps, eps, sk + 1]);
   }
 }
 
@@ -87,22 +87,26 @@ module peg() {
   }
 }
 
-module shell() {
+module usb_cut(extra = 0) {
+  // USB-C の口 (extra = 背面より後ろへ伸ばす長さ、一体型でﾄﾚｲの壁も抜く時)
+  translate([usb_x, y_out - eps - extra, hdr_h + pcb_t + usb_h/2]) rotate([-90, 0, 0])
+    linear_extrude(wall + 1 + extra) offset(r = 2) square([12.6 - 4, 7.0 - 4], center = true);
+}
+
+module shell(sk = skirt, jk = use_jacks) {
   difference() {
-    outer();
+    outer(sk);
     cavity();
     // 本体が入る所 (すその内側 = 本体背面より前、上面より下)
     translate([x_l - 1, 0, -skirt - 1]) cube([x_r - x_l + 2, BD + 1, skirt + 1]);
-    // USB-C の口
-    translate([usb_x, y_out - eps, hdr_h + pcb_t + usb_h/2]) rotate([-90, 0, 0])
-      linear_extrude(wall + 1) offset(r = 2) square([12.6 - 4, 7.0 - 4], center = true);
+    usb_cut();
     // ねじ穴 (すそ)
-    for (x = screws) translate([x, y_out - eps, -screw_dz]) rotate([-90, 0, 0]) {
+    if (sk > 0) for (x = screws) translate([x, y_out - eps, -screw_dz]) rotate([-90, 0, 0]) {
       cylinder(d = screw_hole, h = -y_out + 1);
       cylinder(d = head_d, h = head_sink + eps);
     }
     if (led_window) translate([led[0], led[1], inner_h - eps]) cylinder(d = 2.2, h = roof + 1);
-    if (use_jacks) for (xo = [x_l - 1, x_r - end_wall - 1])
+    if (jk) for (xo = [x_l - 1, x_r - end_wall - 1])
       translate([xo, jack_y, jack_z]) rotate([0, 90, 0]) cylinder(d = jack_hole, h = end_wall + 2);
   }
 }
@@ -120,7 +124,7 @@ module inside() {
   }
 }
 
-module cap() { shell(); inside(); }
+module cap(sk = skirt, jk = use_jacks) { shell(sk, jk); inside(); }
 
 module fittest() {
   // ねじ 2本と LEGO ﾋﾟﾝ 2本の所だけ (位置と押さえの確認用)

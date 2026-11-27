@@ -48,20 +48,30 @@ module rbox(x0, x1, y0, y1, z0, z1, r) {
     translate([x, y, 0]) cylinder(r = r, h = z1 - z0);
 }
 
-module tray() {
+// ---- 一体型 (ｷｬｯﾌﾟと一体、hardware/dock/) で使う値
+cap_top  = BH + 15.2;   // ｷｬｯﾌﾟの天面 (v)
+hood_in  = [2.1, 1.6];  // ｹｰﾌﾞﾙの通り道: 前側 (ｷｬｯﾌﾟの背面の壁) の厚み、天井と奥の壁の厚み
+
+module tray(dock = false, oe = open_end) {
   difference() {
-    rbox(ou0, ou1, ov0, ov1, 0, H, 3);
+    // dock: 外形をｷｬｯﾌﾟの天面まで伸ばし、ﾎﾟｹｯﾄの上をｹｰﾌﾞﾙの通り道 (ﾌｰﾄﾞ) にする
+    rbox(ou0, ou1, ov0, dock ? cap_top : ov1, 0, H, 3);
+    if (dock) {
+      hu0 = oe == "left"  ? ou0 - 1 : pu0;
+      hu1 = oe == "right" ? ou1 + 1 : pu1;
+      translate([hu0, ov1, hood_in[0]]) cube([hu1 - hu0, cap_top - hood_in[1] - ov1, H - hood_in[1] - hood_in[0]]);
+    }
     // ﾊﾞｯﾃﾘｰのﾎﾟｹｯﾄ (差し込み口側は端まで抜く)
-    xo0 = open_end == "left"  ? ou0 - 1 : pu0;
-    xo1 = open_end == "right" ? ou1 + 1 : pu1;
+    xo0 = oe == "left"  ? ou0 - 1 : pu0;
+    xo1 = oe == "right" ? ou1 + 1 : pu1;
     translate([xo0, pv0, pw0]) cube([xo1 - xo0, PH, PT]);
     // 表側: 長辺の縁 (lip) だけ残して開ける (残量表示が見える)
     translate([xo0, pv0 + lip, pw1 - eps]) cube([xo1 - xo0, PH - 2*lip, lip_t + 1]);
-    // 上の壁の切り欠き (ｷｬｯﾌﾟの USB-C ﾌﾟﾗｸﾞ)
-    translate([plug_notch[0], pv1 - lip - 0.05, pw0 + 1.5]) cube([plug_notch[1] - plug_notch[0], wall + lip + 1, H]);
+    // 上の壁の切り欠き (ｷｬｯﾌﾟの USB-C ﾌﾟﾗｸﾞ)。dock では通り道の床 (ﾎﾟｹｯﾄの上の壁) は残す
+    if (!dock) translate([plug_notch[0], pv1 - lip - 0.05, pw0 + 1.5]) cube([plug_notch[1] - plug_notch[0], wall + lip + 1, H]);
     // ﾎﾞﾀﾝ用: 差し込み口側の長辺の壁 (上下とも)
-    bu0 = open_end == "right" ? pu1 - button_cut : ou0 - 1;
-    bu1 = open_end == "right" ? ou1 + 1 : pu0 + button_cut;
+    bu0 = oe == "right" ? pu1 - button_cut : ou0 - 1;
+    bu1 = oe == "right" ? ou1 + 1 : pu0 + button_cut;
     for (vv = [[ov0 - 1, pv0 + lip + 0.05], [pv1 - lip - 0.05, ov1 + 1]])   // 縁ごと切る (浮いた縁を残さない)
       translate([bu0, vv[0], pw0 + 1.5]) cube([bu1 - bu0, vv[1] - vv[0], H]);
     // 床: 本体の M2 ｲﾝｻｰﾄへのﾈｼﾞ (ﾊﾞｯﾃﾘｰ側から皿もみ、ﾈｼﾞ下の床 1.5mm)
@@ -69,9 +79,17 @@ module tray() {
       cylinder(d = 2.3, h = floor_t + 1);
       translate([0, 0, 1.5]) cylinder(d = 4.3, h = floor_t);
     }
-    // 床: ｷｬｯﾌﾟのすその逃げ (すき間 0.2 / 厚み +0.3) と、ﾈｼﾞ頭の逃げ
-    translate([cap_skirt[0] - 0.2, cap_skirt[2] - 0.2, -eps]) cube([cap_skirt[1] - cap_skirt[0] + 0.4, ov1 - cap_skirt[2] + 1, cap_skirt[3] + 0.3 + eps]);
-    for (p = cap_ears) translate([p[0] - 4.6, p[1] - 3.2, -eps]) cube([9.2, 20, floor_t + eps]);
+    if (!dock) {
+      // 床: ｷｬｯﾌﾟのすその逃げ (すき間 0.2 / 厚み +0.3) と、ﾈｼﾞ頭の逃げ
+      translate([cap_skirt[0] - 0.2, cap_skirt[2] - 0.2, -eps]) cube([cap_skirt[1] - cap_skirt[0] + 0.4, ov1 - cap_skirt[2] + 1, cap_skirt[3] + 0.3 + eps]);
+      for (p = cap_ears) translate([p[0] - 4.6, p[1] - 3.2, -eps]) cube([9.2, 20, floor_t + eps]);
+    } else {
+      // 床: ｷｬｯﾌﾟ用のねじ穴 (本体背面上端の M2 穴へ、ｲﾝｻｰﾄと同じ皿もみ)
+      for (p = cap_ears) translate([p[0], p[1], -eps]) {
+        cylinder(d = 2.3, h = floor_t + 1);
+        translate([0, 0, 1.5]) cylinder(d = 4.3, h = floor_t);
+      }
+    }
     // 床: ｶﾒﾗの逃げ (ﾚﾝｽﾞが少し出ていても当たらないように)
     translate([camera[0], camera[1], -eps]) cylinder(d = 9, h = floor_t + eps);
     // 床の肉抜き (軽く、熱がこもらないように) — ﾈｼﾞの周りは残す
@@ -83,14 +101,14 @@ module tray() {
   for (side = [0, 1]) {
     y = side == 0 ? pv0 : pv1;
     s = side == 0 ? 1 : -1;
-    lu0 = open_end == "right" ? pu0 : pu0 + button_cut;
-    lu1 = open_end == "right" ? pu1 - button_cut : pu1;
+    lu0 = oe == "right" ? pu0 : pu0 + button_cut;
+    lu1 = oe == "right" ? pu1 - button_cut : pu1;
     translate([lu0, y, pw1]) rotate([0, 90, 0]) linear_extrude(lu1 - lu0)
       polygon([[0, 0], [0, s * 0.01], [0.01, 0]]);   // (形だけ。縁 1.6 は 45° 以内なので支え不要)
   }
   // 差し込み口の抜け止め (ﾎﾟｹｯﾄの床に小さな山。ﾊﾞｯﾃﾘｰを押し込むと乗り越える)
   // 山はﾊﾞｯﾃﾘｰが奥まで入った時の端より外 (ﾎﾟｹｯﾄの外の床) に置く。中に置くとﾊﾞｯﾃﾘｰが乗り上げて入りきらない
-  su = open_end == "right" ? pu1 + 0.7 : pu0 - 0.7;
+  su = oe == "right" ? pu1 + 0.7 : pu0 - 0.7;
   for (v = [pv0 + 12, pv1 - 12]) translate([su, v, pw0 - 0.15]) scale([1, 4, 1]) sphere(r = snap + 0.15, $fn = 16);
 }
 
@@ -102,4 +120,5 @@ module dummy() {
 }
 
 if (part == "print") tray();
+else if (part == "none") ;
 else { dummy(); color("whitesmoke", 0.9) tray(); }
