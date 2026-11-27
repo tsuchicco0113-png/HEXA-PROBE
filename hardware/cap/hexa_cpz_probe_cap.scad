@@ -31,6 +31,7 @@ y0 = usb_y0 - 0.2 - wall;                       // 背面側は USB-C の口の�
 y1 = BD;                                        // 正面は本体と面一
 r_side = 3.0;  r_top = 2.0;
 // ---- 4mm ﾊﾞﾅﾅｼﾞｬｯｸ 秋月 MK-628-0 (赤) / MK-628-1 (黒)
+use_jacks   = true;                             // false = 穴なし (USB 給電だけで使う時。刻印も消える)
 //      秋月の表記: 取付穴 9mm、径 10.5mm、長さ 25.7mm。つばの厚み・ﾅｯﾄの大きさは未確認 (現物で確認)
 jack_hole   = 9.2;                              // 取付穴 9mm + 印刷の縮み分
 jack_flange = 0;                                // つばを沈める座ぐり (0 = なし。現物を見てから)
@@ -89,7 +90,7 @@ module shell() {
     // LED の窓 (天面)
     translate([led[0], led[1], inner_h - eps]) cylinder(d = 2.2, h = roof + 1);
     // ﾊﾞﾅﾅｼﾞｬｯｸの穴 (左右の端) と、つばの座ぐり
-    for (j = jacks) {
+    if (use_jacks) for (j = jacks) {
       xo = j[0] == 0 ? -1 : BW - end_wall - 1;
       translate([xo, jack_y, jack_z]) rotate([0, 90, 0]) cylinder(d = jack_hole, h = end_wall + 2);
       if (jack_flange > 0) {
@@ -133,7 +134,7 @@ module dummy() {
   color("silver") translate([usb_x - 4.47, usb_y0, hdr_h + pcb_t]) cube([8.94, 7.3, usb_h]);
   color("black") translate([bx + 2, 12.03 - 1.4, 0]) cube([18, 5.3, hdr_h]);
   // ﾊﾞﾅﾅｼﾞｬｯｸ (つば φ11 + 本体 φ6 x 16mm + ﾅｯﾄ) の見本
-  for (j = jacks) {
+  if (use_jacks) for (j = jacks) {
     s_ = j[0] == 0 ? 1 : -1;  xw = j[0] == 0 ? 0 : BW;
     translate([xw, jack_y, jack_z]) rotate([0, 90 * s_, 0]) {
       color(j[0] == 0 ? "black" : "red") translate([0, 0, -10]) cylinder(d = 10.5, h = 10);   // 外に出る部分 (仮)
@@ -142,7 +143,7 @@ module dummy() {
       color("silver") translate([0, 0, end_wall]) cylinder(d = 13.0, h = 2.5, $fn = 6);      // ﾅｯﾄ (仮 12mm 二面幅)
     }
   }
-  color("tan") translate([BW - 24, jack_y, jack_z]) rotate([0, 90, 0]) cylinder(d = 2.4, h = 6.5);
+  if (use_jacks) color("tan") translate([BW - 24, jack_y, jack_z]) rotate([0, 90, 0]) cylinder(d = 2.4, h = 6.5);
 }
 
 module fittest() {
