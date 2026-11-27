@@ -162,6 +162,11 @@ def list_serial_ports():
         if info:
             vid, pid, prod = info
             sub = f"{prod or USB_CHIPS.get(vid, 'USB')}  {vid}:{pid}"
+        # 番号 (ttyACM0/1…) はﾘｾｯﾄで変わることがあるので、あれば by-id (機器ごとに固定の名前) で開く
+        for link in glob.glob("/dev/serial/by-id/*"):
+            if os.path.realpath(link) == os.path.realpath(dev):
+                dev = link
+                break
         out.append((name, sub, dev))
     if os.path.exists("/dev/serial0"):
         out.append(("Grove UART", "serial0 → " + os.path.basename(os.path.realpath("/dev/serial0")) +
