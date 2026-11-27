@@ -1,6 +1,7 @@
 // =====================================================================
-//  HEXA STAGE  CPZ USB-C PWR + TEST ｷｬｯﾌﾟ v0.5  (Cap LoRa 風)
-//  - ただの四角い箱。切り欠きなし。IR (送受信) の窓は箱の外 (箱を右へ寄せた)
+//  HEXA STAGE  CPZ USB-C PWR + TEST ｷｬｯﾌﾟ v0.6  (Cap LoRa 風)
+//  - 切り欠きなしの箱。左右対称 (中心 x42)。正面は IR の窓の手前 (背面から 16) でそろえ、
+//    基板の所 (中央) だけ少し正面へ出す。IR (送受信) の窓は箱の外
 //  - 取り付けは Cap LoRa-1262 と同じ: 背面に下がる「すそ」から M2 ねじ 2本で
 //    本体背面のねじ穴 (x28 / x56、上面から 3.9 下) に留める
 //  - 位置決め: LEGO 穴にﾋﾟﾝ2本 (基板も押さえる)
@@ -15,10 +16,12 @@ $fn = 48;
 eps = 0.01;
 
 // ---- 本体 (公式 STL から)
-BD   = 21.2;                  // 上面の奥行き (正面の縁の面取りの手前まで)
-ir   = [5.4, 14.4, 16.8, 20.2];  // IR の窓 (x0, x1, y0, y1) … 箱はこれより右
-x_l  = 16.6;                  // 箱の左端 (左の溝 11.6〜16.4 の外、IR から 2.2 空く)
-x_r  = 78.2;                  // 箱の右端 (背面側の平らな所の右端)
+ir   = [5.4, 14.4, 16.8, 20.2];  // IR の窓 (x0, x1, y0, y1) … 箱の正面はこれより手前
+x_l  = 5.8;                   // 箱の左端 (背面側の平らな所)
+x_r  = 78.2;                  // 箱の右端 (同じ。中心 42 で左右対称)
+D    = 16.0;                  // 箱の奥行き (IR の窓 16.8 の 0.8 手前)
+mid_w = 26.0;                 // 中央の出っ張りの幅 (基板 22 + 壁 + すき間 0.4)
+BD   = 19.6;                  // 中央の出っ張りの正面 (基板 17.6 + 0.4 + 壁)
 screws = [28.0, 56.0];        // 背面のねじ穴 (x)
 screw_dz = 3.9;               // 上面からねじ穴の中心まで (下へ)
 // ---- 基板 (v0.2)
@@ -43,7 +46,7 @@ screw_hole = 2.3;  head_d = 4.2;  head_sink = 0.8;
 // ---- 4mm ﾊﾞﾅﾅｼﾞｬｯｸ (秋月 MK-628: 取付穴 9mm / 径 10.5 / 長さ 25.7。裏側の長さは未確認)
 use_jacks = true;                               // false = 穴なし (USB 給電だけで使う時)
 jack_hole = 9.2;
-jack_y = 12.0;                                  // 背面からの位置 (LEGO の柱をよける)
+jack_y = 7.0;                                   // 背面からの位置 (箱の奥行きの真ん中あたり)
 jack_z = 8.2;                                   // 上面からの高さ (中心)
 
 module rbox(x0, x1, y0, y1, z0, h) {
@@ -55,8 +58,11 @@ module rbox(x0, x1, y0, y1, z0, h) {
   }
 }
 
+mid = [42 - mid_w/2, 42 + mid_w/2];
+
 module outer() {
-  rbox(x_l, x_r, y_out, BD, 0, H);
+  rbox(x_l, x_r, y_out, D, 0, H);
+  rbox(mid[0], mid[1], D - 4, BD, 0, H);
   // すそ: 背面に沿って下がる板 (本体背面に密着、y_out〜0)
   hull() for (x = [x_l + r_side, x_r - r_side]) {
     translate([x, y_out + r_side, -skirt]) cylinder(r = r_side, h = skirt + 1);
@@ -65,7 +71,8 @@ module outer() {
 }
 
 module cavity() {
-  translate([x_l + end_wall, y_in, -skirt - 1]) cube([x_r - x_l - 2*end_wall, BD - wall - y_in, inner_h + skirt + 1]);
+  translate([x_l + end_wall, y_in, -skirt - 1]) cube([x_r - x_l - 2*end_wall, D - wall - y_in, inner_h + skirt + 1]);
+  translate([mid[0] + wall, y_in, -skirt - 1]) cube([mid_w - 2*wall, BD - wall - y_in, inner_h + skirt + 1]);
 }
 
 module peg() {
@@ -106,8 +113,8 @@ module inside() {
     translate([0, 0, zb]) cylinder(d = 6.0, h = inner_h - zb + eps);
     translate([0, 0, hdr_h + pcb_t]) peg();
   }
-  // 配線ﾌｯｸ (正面側の天井、ｼﾞｬｯｸの裏をよける)
-  for (x = [37, 47]) translate([x - 1.5, BD - wall - 3.2, inner_h - 3.0]) difference() {
+  // 配線ﾌｯｸ (正面側の天井)
+  for (x = [28, 56]) translate([x - 1.5, D - wall - 3.2, inner_h - 3.0]) difference() {
     cube([3, 3.2, 3.0 + eps]);
     translate([-1, 0.8, -eps]) cube([5, 1.6, 2.0]);
   }
