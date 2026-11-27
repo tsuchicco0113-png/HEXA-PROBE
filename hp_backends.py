@@ -691,6 +691,11 @@ def lirc_features(dev):
         os.close(fd)
 
 
+# 家製協 (AEHA) の先頭2ﾊﾞｲﾄ = ﾒｰｶｰｺｰﾄﾞ (表示と同じ並び)。ｴｱｺﾝなど
+AEHA_MAKERS = {(0x02, 0x20): "Panasonic", (0x11, 0xDA): "ﾀﾞｲｷﾝ", (0x23, 0xCB): "三菱電機",
+               (0x14, 0x63): "富士通", (0xAA, 0x5A): "ｼｬｰﾌﾟ"}
+
+
 def ir_device():
     """受信できる lirc を選ぶ (CPZ は lirc0 = 送信 GPIO12、lirc1 = 受信 GPIO13)"""
     devs = sorted(glob.glob("/dev/lirc*"), key=lambda d: int(re.sub(r"\D", "", d) or 0))
@@ -817,7 +822,8 @@ def decode_ir(d):
         if len(bits) >= 16:
             by = _lsb_bytes(bits)
             txt = " ".join(f"{b:02X}" for b in by[:9]) + (" …" if len(by) > 9 else "")
-            return "家製協", f"{txt}  ({len(bits)}bit)", ("AEHA", tuple(by))
+            maker = AEHA_MAKERS.get(tuple(by[:2]), "")
+            return "家製協", (f"{maker}  " if maker else "") + f"{txt}  ({len(bits)}bit)", ("AEHA", tuple(by))
     if 2400 <= p0 <= 5200 and _near(s0, p0, 0.3) and n <= 5:
         return "家製協", "リピート", ("AEHA", "rep")
     return "不明", f"パルス{(n + 1) // 2}個  先頭 {p0}/{s0}µs", ("RAW", n // 4, p0 // 500, s0 // 500)
