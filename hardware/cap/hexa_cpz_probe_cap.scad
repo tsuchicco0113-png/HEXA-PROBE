@@ -1,5 +1,7 @@
 // =====================================================================
-//  HEXA STAGE  CPZ USB-C PWR + TEST ｷｬｯﾌﾟ v0.2  (ﾊﾞﾅﾅｼﾞｬｯｸ MK-628 を左右に)
+//  HEXA STAGE  CPZ USB-C PWR + TEST ｷｬｯﾌﾟ v0.3  (ﾊﾞﾅﾅｼﾞｬｯｸ MK-628 を左右に)
+//  v0.3: 本体の上面からはみ出さないよう外形を inset だけ内側へ。背面は USB-C の所だけ出っ張る。
+//        正面の溝を削除。耳は既定で無し。IR などを避ける ir_cut を追加
 //  Cap LoRa-1262 と同じ「上面まるごと」の形と高さ (84 x 24 x 15.2)。
 //  中に USB-C PWR 基板 v0.2 を収め、4mm ﾊﾞﾅﾅｼﾞｬｯｸを左右の端に1つずつ:
 //    左 = COM (黒, GND)   右 = Ω (赤, G22 →1kΩ→ ｼﾞｬｯｸ。1kΩ はｼﾞｬｯｸの端子に直付け)
@@ -27,8 +29,12 @@ press = 0.3;          // 柱が基板を押し下げる量 (mm)。ｶﾀつく�
 wall = 1.6;  roof = 1.6;
 H  = 15.2;                                      // Cap LoRa-1262 と同じ高さ
 inner_h = H - roof;                             // 中の高さ (ﾅｯﾄを回す余裕)
-y0 = usb_y0 - 0.2 - wall;                       // 背面側は USB-C の口の分だけ出す
-y1 = BD;                                        // 正面は本体と面一
+inset = 0.8;                                    // 本体の上面の縁から内側へ下げる量 (角の丸みに乗らないように)
+y0 = usb_y0 - 0.2 - wall;                       // USB-C の出っ張りの背面 (ここだけ本体の外に出る)
+yb = inset;                                     // ふだんの背面側の外面
+y1 = BD - inset;                                // 正面の外面
+xl = inset;  xr = BW - inset;                   // 左右の外面
+bump = [bx - 1.8, bx + PW + 1.8];               // 背面の出っ張り (USB-C と基板の端を包む) の幅
 r_side = 3.0;  r_top = 2.0;
 // ---- 4mm ﾊﾞﾅﾅｼﾞｬｯｸ 秋月 MK-628-0 (赤) / MK-628-1 (黒)
 use_jacks   = true;                             // false = 穴なし (USB 給電だけで使う時。刻印も消える)
@@ -37,16 +43,19 @@ jack_hole   = 9.2;                              // 取付穴 9mm + 印刷の縮�
 jack_flange = 0;                                // つばを沈める座ぐり (0 = なし。現物を見てから)
 jack_seat   = 0.6;                              // つばを沈める深さ
 end_wall    = 2.0;                              // ｼﾞｬｯｸを付ける端の壁の厚み (ﾈｼﾞ長に合わせる)
-jack_y = (usb_y0 - 0.2 - wall + BD) / 2;        // 奥行きの真ん中
+jack_y = (yb + y1) / 2;                         // 奥行きの真ん中
 jack_z = 7.0;                                   // 上面からの高さ (中心)
 jacks  = [[0, "COM"], [1, "Ω"]];                // [0=左 / 1=右, 正面の刻印]
 // ---- 背面の耳 (M2 ﾈｼﾞ、Cap LoRa と同じ止め方。不要なら false)
-use_ears = true;
+use_ears = false;                               // true にすると背面に耳 (そこだけ本体の外に出る)
 ears_x   = [28, 56];                            // 背面上端ｽﾄﾘｯﾌﾟの M2 (左右対称)
 ear_h    = 6.0;                                 // 上面から下へ
 ear_z    = -3.1;                                // 穴の中心 (ｽﾄﾘｯﾌﾟ 6.2 の真ん中、要実測)
-// ---- 上面の穴を避けたい所 (microSD など)。[[x0, x1, y0, y1], ...] で切り欠く
+// ---- 上面の穴を避けたい所 (microSD など)。[[x0, x1, y0, y1], ...] で上から下まで切り欠く
 keepout = [];
+// ---- IR (赤外線の送受信) を出す切り欠き。本体を正面から見た左端からの [x0, x1] と、背面からの [y0, y1]
+//      天井と、近い方の壁 (正面 / 背面) まで抜く。空なら無し (位置は実物で確認)
+ir_cut = [];            // 例: [[60, 70, 12, 22.1]]
 
 module rounded_block(x0, x1, ya, yb, h) {
   // 縦の角 r_side、天面の縁 r_top で丸めた箱 (底は平ら)
@@ -69,21 +78,30 @@ module peg() {       // LEGO 穴に入る割りﾋﾟﾝ (v0.2 ｶﾊﾞーと�
 }
 
 module ear(x) {
-  w = 8;
+  // 本体の背面に沿って下りる耳 + ｷｬｯﾌﾟにつなぐ橋 (この2か所だけ本体の外に出る)
+  w = 8;  ey = -wall;
   difference() {
-    hull() {
-      translate([x - w/2, y0, -0.01]) cube([w, wall, 0.01]);
-      translate([x, y0 + wall, -ear_h + w/2]) rotate([90, 0, 0]) cylinder(d = w, h = wall);
+    union() {
+      hull() {
+        translate([x - w/2, ey, -0.01]) cube([w, wall, 0.01]);
+        translate([x, 0, -ear_h + w/2]) rotate([90, 0, 0]) cylinder(d = w, h = wall);
+      }
+      translate([x - w/2, ey, 0]) cube([w, yb + wall - ey, 4]);
     }
-    translate([x, y0 - 1, ear_z]) rotate([-90, 0, 0]) cylinder(d = 2.3, h = wall + 2);
+    translate([x, ey - 1, ear_z]) rotate([-90, 0, 0]) cylinder(d = 2.3, h = wall + 2);
   }
 }
 
 module shell() {
   difference() {
-    rounded_block(0, BW, y0, y1, H);
+    union() {
+      rounded_block(xl, xr, yb, y1, H);
+      rounded_block(bump[0], bump[1], y0, yb + 6, H);        // 背面の出っ張り
+    }
     // 中 (底から inner_h まで)。左右の端は end_wall
-    translate([end_wall, y0 + wall, -eps]) cube([BW - 2*end_wall, y1 - y0 - 2*wall, inner_h + eps]);
+    translate([xl + end_wall, yb + wall, -eps]) cube([xr - xl - 2*end_wall, y1 - yb - 2*wall, inner_h + eps]);
+    // 出っ張りの中 (基板の端と USB-C)
+    translate([bump[0] + wall, y0 + wall, -eps]) cube([bump[1] - bump[0] - 2*wall, yb + wall - y0 - wall + 0.1, inner_h + eps]);
     // USB-C の口 (ﾌﾟﾗｸﾞの太い所も入るように)
     translate([usb_x, y0 - eps, hdr_h + pcb_t + usb_h/2]) rotate([-90, 0, 0])
       linear_extrude(wall + 1) offset(r = 2) square([12.6 - 4, 7.0 - 4], center = true);
@@ -91,19 +109,23 @@ module shell() {
     translate([led[0], led[1], inner_h - eps]) cylinder(d = 2.2, h = roof + 1);
     // ﾊﾞﾅﾅｼﾞｬｯｸの穴 (左右の端) と、つばの座ぐり
     if (use_jacks) for (j = jacks) {
-      xo = j[0] == 0 ? -1 : BW - end_wall - 1;
+      xo = j[0] == 0 ? xl - 1 : xr - end_wall - 1;
       translate([xo, jack_y, jack_z]) rotate([0, 90, 0]) cylinder(d = jack_hole, h = end_wall + 2);
       if (jack_flange > 0) {
-        xs = j[0] == 0 ? -1 : BW - jack_seat;
+        xs = j[0] == 0 ? xl - 1 : xr - jack_seat;
         translate([xs, jack_y, jack_z]) rotate([0, 90, 0]) cylinder(d = jack_flange + 0.6, h = jack_seat + 1);
       }
       // 正面の刻印 (端寄り)。正面は y = BD の面
-      tx = j[0] == 0 ? 7.5 : BW - 7.5;
+      tx = j[0] == 0 ? xl + 7.0 : xr - 7.0;
       translate([tx, y1 + eps, jack_z]) rotate([90, 0, 0]) linear_extrude(0.5)
         text(j[1], size = 3.2, halign = "center", valign = "center", font = "Liberation Sans:style=Bold");
     }
-    // 正面の細い溝 (Cap 風のﾗｲﾝ)。刻印の間だけ
-    translate([14, y1 - 0.45, H * 0.45]) cube([BW - 28, 1, 0.6]);
+    // IR の切り欠き: 天井から下まで、近い方の壁ごと抜く
+    for (c = ir_cut) {
+      ya = c[2] < BD / 2 ? y0 - 1 : c[2];
+      yz = c[3] > BD / 2 ? BD + 1 : c[3];
+      translate([c[0], ya, -eps]) cube([c[1] - c[0], yz - ya, H + 1]);
+    }
     for (k = keepout) translate([k[0], k[2], -eps]) cube([k[1] - k[0], k[3] - k[2], H + 1]);
   }
 }
@@ -116,7 +138,7 @@ module inside() {
     translate([0, 0, hdr_h + pcb_t]) peg();         // ﾋﾟﾝ先の位置は変えない
   }
   // 配線を天井側に留める小さなﾌｯｸ (基板の正面側の余白を通して左右へ)
-  for (x = [12, 24, 60, 72]) translate([x - 1.5, BD - wall - 3.2, inner_h - 3.0]) difference() {
+  for (x = [12, 24, 60, 72]) translate([x - 1.5, y1 - wall - 3.2, inner_h - 3.0]) difference() {
     cube([3, 3.2, 3.0 + eps]);
     translate([-1, 0.8, -eps]) cube([5, 1.6, 2.0]);
   }
