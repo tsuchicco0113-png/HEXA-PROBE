@@ -556,10 +556,10 @@ I2C_HINTS = {0x0D: "QMC5883 地磁気", 0x10: "VEML7700 光", 0x18: "LIS3DH 加�
              0x3C: "SSD1306 OLED", 0x3D: "SSD1306 OLED", 0x40: "INA219 電流 / HDC1080 / PCA9685",
              0x41: "INA219 電流", 0x42: "GPS (u-blox)", 0x44: "SHT3x/SHT4x 温湿度 (ENV)", 0x45: "SHT3x 温湿度",
              0x48: "ADS1115 ADC / TMP102", 0x49: "ADS1115 ADC", 0x4A: "ADS1115", 0x4B: "ADS1115",
-             0x51: "BM8563 RTC", 0x52: "VL53L4 / Nunchuk", 0x53: "ADXL345 加速度", 0x55: "BQ27220 電池 (本体)",
+             0x32: "RX8130 RTC (本体)", 0x51: "BM8563 RTC", 0x52: "VL53L4 / Nunchuk", 0x53: "ADXL345 加速度", 0x55: "BQ27220 電池 (本体)",
              0x57: "MAX30102 / EEPROM", 0x58: "SGP30 空気", 0x59: "SGP40 空気", 0x5A: "MLX90614 温度 / CCS811",
              0x5B: "CCS811", 0x5C: "AM2320 温湿度", 0x60: "Si5351 / MCP4725 DAC", 0x61: "SCD30 CO2",
-             0x62: "SCD40 CO2", 0x68: "MPU6886/BMI270 IMU / DS3231 RTC", 0x69: "BMI270 IMU",
+             0x62: "SCD40 CO2", 0x68: "BMI270 IMU (本体) / MPU6886 / DS3231", 0x69: "BMI270 IMU",
              0x6A: "LSM6DS IMU", 0x6B: "LSM6DS IMU", 0x70: "PaHub (TCA9548A) / QMP6988 (ENV III)",
              0x76: "BMP280/BME280 気圧", 0x77: "BME680/BMP280 気圧"}
 

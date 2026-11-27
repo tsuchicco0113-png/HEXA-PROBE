@@ -70,4 +70,5 @@ sudo reboot                              # 初回だけ (ｱｲｺﾝと権限�
 ## 困った時
 - 画面が戻らない: `sudo pkill -CONT -f APPLaunch`
 - ﾛｸﾞ: `~/.local/share/hexaprobe/app.log`
+- `--ir` で GPIO13 をｶｰﾈﾙ (gpio-ir) が使うので、内蔵の **IR Chat は受信できなくなる** (使わないならﾗﾝﾁｬｰから外してOK)。IR Remote (送信 GPIO12) は影響なし
 - 赤外線を元に戻す: `/boot/firmware/config.txt` の `dtoverlay=gpio-ir,gpio_pin=13` 行を消す (元は `.hexaprobe.bak`)
