@@ -169,6 +169,25 @@ def list_serial_ports():
     return out
 
 
+class ZeroWatch:
+    """00 だけが大量に届く = RX が Low に張り付き。1回だけ知らせる"""
+    MSG = "00 ばかり届きます: RX が Low のまま (相手の電源 = 設定>ExtPort の 5V・配線・GND・速度を確認)"
+
+    def __init__(self):
+        self.n, self.t0, self.warned = 0, time.time(), False
+
+    def check(self, data):
+        now = time.time()
+        if now - self.t0 > 1.0:
+            self.n, self.t0 = 0, now
+        if data and data.count(0) == len(data):
+            self.n += len(data)
+            if self.n > 300 and not self.warned:
+                self.warned = True
+                return True
+        return False
+
+
 class SerialReader(Worker):
     kind = "serial"
 
@@ -180,7 +199,7 @@ class SerialReader(Worker):
         set_baud(self.fd, baud)
 
     def run(self):
-        zeros, zt0, warned = 0, time.time(), False
+        zw = ZeroWatch()
         while not self.stop_ev.is_set():
             r, _, _ = select.select([self.fd], [], [], 0.2)
             if not r:
@@ -197,15 +216,8 @@ class SerialReader(Worker):
                 time.sleep(0.05)
                 continue
             self.raw(data.hex(" "))
-            # 00 だけが大量に来る = RX が Low に張り付き (何もつながっていない / 電源が無い / 速度違い)
-            now = time.time()
-            if now - zt0 > 1.0:
-                zeros, zt0 = 0, now
-            if data.count(0) == len(data):
-                zeros += len(data)
-                if zeros > 500 and not warned:
-                    warned = True
-                    self.q.put(("hint", "00 ばかり届きます: RX が Low のまま (相手の電源・配線・GND・速度を確認)"))
+            if zw.check(data):
+                self.q.put(("hint", ZeroWatch.MSG))
             self.q.put(("data", data, time.time()))
 
     def set_baud(self, baud):
@@ -536,10 +548,12 @@ class MidiReader(Worker):
             self.fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
 
     def run(self):
+        zw = ZeroWatch()
         while not self.stop_ev.is_set():
             r, _, _ = select.select([self.fd], [], [], 0.2)
             if not r:
                 continue
+            time.sleep(0.003)                # 1 ﾊﾞｲﾄずつ起こされないよう少しためる (3ms = MIDI 約10ﾊﾞｲﾄ)
             try:
                 data = os.read(self.fd, 1024)
             except BlockingIOError:
@@ -549,6 +563,8 @@ class MidiReader(Worker):
                 return
             t = time.time()
             self.raw(data.hex(" "))
+            if zw.check(data):
+                self.q.put(("hint", ZeroWatch.MSG))
             for msg in self.parser.feed(data):
                 self.q.put(("msg", msg, t))
 
