@@ -7,7 +7,7 @@
 //  座標は v0.2 ｶﾊﾞーと同じ: x = 本体を正面から見た左→右 (本体の左端 0)、
 //  y = 背面からの奥行き (背面 0)、z = 本体上面から上。印刷は天面を下に (part="print")
 // =====================================================================
-part = "print";      // "print" / "fit" / "end" (右端の見本)
+part = "print";      // "print" / "fittest" (柱まわりだけの試し刷り) / "fit"
 $fn = 48;
 eps = 0.01;
 
@@ -21,6 +21,8 @@ hdr_h = 2.5;  pcb_t = 1.6;  usb_h = 3.26;
 usb_x = bx + 11.0;  usb_y0 = -0.3;              // USB-C の口は背面から 0.3 出る
 lego  = [[bx + 3, 4], [bx + 19, 4]];            // 上面の LEGO 穴 (x34/50, 背面から4)
 led   = [bx + 7.2, 16.45];
+// ---- 基板の押さえ
+press = 0.3;          // 柱が基板を押し下げる量 (mm)。ｶﾀつく→増やす / ｷｬｯﾌﾟが入りきらない→減らす (0〜0.5)
 // ---- ｷｬｯﾌﾟ
 wall = 1.6;  roof = 1.6;
 inner_h = hdr_h + pcb_t + usb_h + 1.0;          // 中の高さ (線と抵抗の分 +0.6)
@@ -97,8 +99,9 @@ module shell() {
 module inside() {
   // 基板を押さえる柱 + LEGO ﾋﾟﾝ
   for (p = lego) translate([p[0], p[1], 0]) {
-    translate([0, 0, hdr_h + pcb_t]) cylinder(d = 6.0, h = inner_h - hdr_h - pcb_t + eps);
-    translate([0, 0, hdr_h + pcb_t]) peg();
+    zb = hdr_h + pcb_t - press;                     // 柱の下面 (基板の上面より press だけ下)
+    translate([0, 0, zb]) cylinder(d = 6.0, h = inner_h - zb + eps);
+    translate([0, 0, hdr_h + pcb_t]) peg();         // ﾋﾟﾝ先の位置は変えない
   }
   // 線の抜け止め: 出口の手前に柱を千鳥に (線を S 字に通す)
   for (p = [[BW - 7, 10.5], [BW - 11, 3.5], [BW - 11, 17.5]])
@@ -125,6 +128,15 @@ module dummy() {
   color("black") translate([BW - 14, 6, wire_z]) rotate([0, 90, 0]) cylinder(d = 2.4, h = 20);
 }
 
+module fittest() {
+  // 柱2本とﾋﾟﾝ、それをつなぐ天板だけ (約10分)。本体に挿して基板のｶﾀつきを確かめる
+  intersection() {
+    cap();
+    translate([lego[0][0] - 5, y0 - 1, -20]) cube([lego[1][0] - lego[0][0] + 10, 11 - y0, 40]);
+  }
+}
+
 if (part == "print") translate([0, 0, H]) mirror([0, 0, 1]) cap();   // 天面を下に (ｻﾎﾟｰﾄ不要)
+else if (part == "fittest") translate([0, 0, H]) mirror([0, 0, 1]) fittest();
 else if (part == "fit") { dummy(); color("whitesmoke", 0.85) cap(); }
 else { color("whitesmoke") cap(); }
