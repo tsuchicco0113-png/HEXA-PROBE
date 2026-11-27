@@ -6,7 +6,7 @@
   NfcWorker     nfcpy の helper を別プロセスで   ("nfc", dict)
   MidiReader    ALSA rawmidi / UART 31250bps    ("msg", tuple, t)
   I2cScanner    i2cdetect を定期実行           ("scan", bus, {addr: "ok"|"UU"})
-  IrReader      /dev/lirc0 (mode2)              ("frame", [µs...], t)
+  IrReader      /dev/lircN 受信 (mode2)              ("frame", [µs...], t)
 共通: ("error", 文) / ("status", 文)
 """
 import fcntl
@@ -660,9 +660,34 @@ class I2cScanner(Worker):
 LIRC_PULSE, LIRC_TIMEOUT, LIRC_OVERFLOW = 0x01000000, 0x03000000, 0x04000000
 
 
+LIRC_GET_FEATURES = 0x80046900           # _IOR('i', 0, __u32)
+LIRC_CAN_REC_MODE2 = 0x00040000
+
+
+def lirc_features(dev):
+    """lirc の機能ﾋﾞｯﾄ (読めなければ None)"""
+    try:
+        fd = os.open(dev, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        buf = bytearray(4)
+        fcntl.ioctl(fd, LIRC_GET_FEATURES, buf)
+        return struct.unpack("<I", bytes(buf))[0]
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
 def ir_device():
-    devs = sorted(glob.glob("/dev/lirc*"))
-    return devs[0] if devs else None
+    """受信できる lirc を選ぶ (CPZ は lirc0 = 送信 GPIO12、lirc1 = 受信 GPIO13)"""
+    devs = sorted(glob.glob("/dev/lirc*"), key=lambda d: int(re.sub(r"\D", "", d) or 0))
+    for d in devs:
+        f = lirc_features(d)
+        if f is not None and f & LIRC_CAN_REC_MODE2:
+            return d
+    return None
 
 
 class IrReader(Worker):

@@ -34,7 +34,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hp_backends as B  # noqa: E402
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 LCD_W, LCD_H = 320, 170
 TOP_H, BOT_H = 18, 16
 BY0, BY1 = TOP_H + 2, LCD_H - BOT_H - 2          # 本文の上下
@@ -2036,8 +2036,12 @@ def probe():
     rc, out = sh(["pinctrl", "get", "4"]) if shutil.which("pinctrl") else (-1, "pinctrl がありません")
     print(f"pinctrl get 4 (sudo なし): rc={rc}  {out}")
     print("grove_mode():", B.grove_mode())
-    print("lirc:", B.ir_device() or "なし",
+    print("lirc (受信に使う):", B.ir_device() or "なし",
           "/", " ".join(sorted(os.listdir("/sys/class/rc"))) if os.path.isdir("/sys/class/rc") else "rc なし")
+    for d in sorted(glob.glob("/dev/lirc*")):
+        f = B.lirc_features(d)
+        print(f"  {d}: " + ("読めない" if f is None else
+              f"features=0x{f:08X} 受信={'○' if f & B.LIRC_CAN_REC_MODE2 else '×'} 送信={'○' if f & 0x2 else '×'}"))
     for cfg in ("/boot/firmware/config.txt", "/boot/config.txt"):
         if os.path.exists(cfg):
             lines = [ln.strip() for ln in open(cfg) if "gpio-ir" in ln]
