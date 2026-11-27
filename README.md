@@ -32,6 +32,8 @@ sudo reboot                              # 初回だけ (ｱｲｺﾝと権限�
 - 断線探し: T で切り替え、ｹｰﾌﾞﾙを曲げながら当てると、離れた瞬間に鳴る。瞬断は ms で残る
 - gpiod (python3-libgpiod v2) ならｴｯｼﾞの時刻を ns で取る。無ければ pinctrl で 20回/秒
 
+ｹｰｽ: `hardware/cap/` (USB-C PWR 基板 + TEST の配線を収める Cap 形のｷｬｯﾌﾟ)
+
 共通: **L = ﾛｸﾞ記録** (`~/hexaprobe-logs/<種類>-日時.log`、上のﾊﾞｰに ●REC)、SPACE 止める、↑↓ 遡る/選ぶ、BS 消去、ESC 戻る。
 方向は F(↑) X(↓) Z(←) C(→)。ﾎｰﾑでは 1〜6 で直接開く。
 
