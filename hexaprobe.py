@@ -34,7 +34,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hp_backends as B  # noqa: E402
 
-VERSION = "0.2.11"
+VERSION = "0.2.12"
 LCD_W, LCD_H = 320, 170
 TOP_H, BOT_H = 18, 16
 BY0, BY1 = TOP_H + 2, LCD_H - BOT_H - 2          # 本文の上下
@@ -397,6 +397,7 @@ class Picker:
 class View:
     key = ""
     name = ""
+    y0 = BY0                         # 本文の上端 (接続の帯がある時は帯の下)
 
     def __init__(self, app):
         self.app = app
@@ -421,6 +422,10 @@ class View:
 
     def status(self):
         return ""
+
+    def link(self):
+        """接続の帯: (向き, 色, 文字, 点灯) か None。向き = "IN" (受けるだけ) / "IN/OUT" (問い合わせて読む)"""
+        return None
 
     def snapshot(self):
         """記録を始めた時点で画面に出ている物 (L の前に見つかった分もﾛｸﾞに残す)"""
@@ -487,7 +492,6 @@ class SerialView(View):
         self.got_any = False     # 開いてから1ﾊﾞｲﾄでも来たか
         self.zero_warn = False   # 00 ばかり (Grove の 5V OFF など)
         self.gave_up = False     # 30秒待っても戻らなかった
-        self.last_sig = None
 
     def enter(self):
         self.pick.set(B.list_serial_ports())
@@ -593,14 +597,17 @@ class SerialView(View):
             return (SUB if grove else OK), f"{head} — {tail} {int(now - self.opened)}秒", False
         return OK, f"{head} — 無言 {int(now - self.last_rx)}秒", False
 
+    def link(self):
+        if not self.port:
+            return None
+        col, txt, lit = self.link_state()
+        side = "黄 (RX) ← 相手の TX" if self.path == "/dev/serial0" else "相手 → CPZ"
+        return "IN", col, f"{txt}   {side}" if col is not REC else txt, lit
+
     def tick(self):
-        st = self.link_state() if self.port else None
-        sig = (st[1], st[2]) if st else None
-        changed = sig != self.last_sig
-        self.last_sig = sig
         if not self.reader:
-            return (self.reconnect() if (self.port and self.lost) else False) or changed
-        dirty = changed
+            return self.reconnect() if (self.port and self.lost) else False
+        dirty = False
         for ev in self.reader.events():
             if ev[0] == "data":
                 self.feed(ev[1], time.time())
@@ -697,26 +704,25 @@ class SerialView(View):
 
     def draw(self, img, d):
         if not self.port:
-            d.text((6, BY0), "どのポートを見る?", fill=SUB, font=self.app.font_t)
-            self.pick.draw(self.app, d, BY0 + 14, ["シリアルポートが見つかりません",
+            d.text((6, self.y0), "どのポートを見る?", fill=SUB, font=self.app.font_t)
+            self.pick.draw(self.app, d, self.y0 + 14, ["シリアルポートが見つかりません",
                                                    "USB シリアル (ESP32 など) を挿して R",
                                                    "Grove UART は /dev/serial0 として出ます"])
             return
-        # 接続の帯: ● 受信中 / ○ つながっている (無言) / 赤 = 切断・待機
-        col, txt, lit = self.link_state()
-        y = BY0
-        d.rectangle((4, y, LCD_W - 4, y + 11), fill=(col[0] // 6, col[1] // 6, col[2] // 6))
-        if lit:
-            d.ellipse((7, y + 2, 14, y + 9), fill=col)
-        else:
-            d.ellipse((7, y + 2, 14, y + 9), outline=col)
-        self.app.fit(d, (18, y), txt, LCD_W - 26, self.app.font_t, col)
-        self.box.draw(self.app, d, 4, BY0 + 13, LCD_W - 4, BY1)
+        self.box.draw(self.app, d, 4, self.y0, LCD_W - 4, BY1)
 
 
 # ================================================================ 2 BLE
 class BleView(View):
     key, name = "ble", "BLE"
+
+    def link(self):
+        if not self.worker:
+            return "IN", REC, self.state or "止まっています", False
+        lit = time.time() - self.worker.last_ev < 0.5
+        if not self.devs:
+            return "IN", SUB, f"スキャン中 — まだ何も見えていません   電波 → CPZ", lit
+        return "IN", OK, f"スキャン中 {len(self.devs)}台   電波 → CPZ (受けるだけ)", lit
 
     def __init__(self, app):
         super().__init__(app)
@@ -833,21 +839,21 @@ class BleView(View):
     def draw(self, img, d):
         app = self.app
         if not self.worker and not self.devs:
-            d.text((10, BY0 + 20), self.state, fill=WARN, font=app.font_s)
+            d.text((10, self.y0 + 20), self.state, fill=WARN, font=app.font_s)
             return
         if self.detail:
             return self.draw_detail(d, self.devs.get(self.detail))
         if not self.order:
-            d.text((10, BY0 + 20), "探しています…", fill=SUB, font=app.font_s)
+            d.text((10, self.y0 + 20), "探しています…", fill=SUB, font=app.font_s)
             return
         rh = 14
-        rows = (BY1 - BY0) // rh
+        rows = (BY1 - self.y0) // rh
         first = max(0, min(self.sel - rows // 2, len(self.order) - rows))
         now = time.time()
         for i, addr in enumerate(self.order[first:first + rows]):
             k = first + i
             dv = self.devs[addr]
-            y = BY0 + i * rh
+            y = self.y0 + i * rh
             old = now - dv.get("last", now) > 20
             if k == self.sel:
                 d.rectangle((2, y - 1, LCD_W - 3, y + rh - 2), fill=ACC_DIM)
@@ -868,7 +874,7 @@ class BleView(View):
         app = self.app
         if not dv:
             return
-        d.text((6, BY0), dv["name"] or "(名前なし)", fill=ACC, font=app.font_bs)
+        d.text((6, self.y0), dv["name"] or "(名前なし)", fill=ACC, font=app.font_bs)
         lines = [f"アドレス  {dv['addr']}",
                  f"電波      {dv['rssi']} dBm" + (f"   TxPower {dv['tx']}" if dv["tx"] else ""),
                  f"メーカー  {B.vendor_name(dv['mfr']) or '-'}  {dv['mfr']}",
@@ -878,12 +884,21 @@ class BleView(View):
         lines += [f"UUID {u}" for u in dv["uuid"][:3]]
         lines += dv["other"][:3]
         for i, t in enumerate(lines[:9]):
-            app.fit(d, (6, BY0 + 18 + i * 12), t, LCD_W - 12, app.font_t, FG if i < 4 else SUB)
+            app.fit(d, (6, self.y0 + 18 + i * 12), t, LCD_W - 12, app.font_t, FG if i < 4 else SUB)
 
 
 # ================================================================ 3 NFC
 class NfcView(View):
     key, name = "nfc", "NFC"
+
+    def link(self):
+        if not self.worker:
+            return "IN/OUT", REC, self.state or "リーダーがありません (RC-S380 を挿す)", False
+        if self.present:
+            return "IN/OUT", OK, "カードあり — 読み取りました", True
+        if "準備" in (self.state or ""):
+            return "IN/OUT", SUB, "リーダー準備中…", False
+        return "IN/OUT", OK, "リーダー OK — カード待ち   CPZ が電波を出して読む", False
 
     def __init__(self, app):
         super().__init__(app)
@@ -993,23 +1008,23 @@ class NfcView(View):
     def draw(self, img, d):
         app = self.app
         if self.detail is not None:
-            self.detail.draw(app, d, 4, BY0, LCD_W - 4, BY1)
+            self.detail.draw(app, d, 4, self.y0, LCD_W - 4, BY1)
             return
         # 上: いちばん新しいカード
-        d.rounded_rectangle((4, BY0, LCD_W - 4, BY0 + 50), 6, fill=(22, 18, 34) if self.present else (18, 21, 29),
+        d.rounded_rectangle((4, self.y0, LCD_W - 4, self.y0 + 50), 6, fill=(22, 18, 34) if self.present else (18, 21, 29),
                             outline=ACC if self.present else (40, 46, 60), width=2 if self.present else 1)
         if self.hist:
             e = self.hist[0]
-            app.fit(d, (12, BY0 + 3), f"{e.get('product') or e.get('type')}", LCD_W - 30, app.font_bs, FG)
-            app.mtext(d, (12, BY0 + 19), e.get("id", ""), ACC, big=True)
+            app.fit(d, (12, self.y0 + 3), f"{e.get('product') or e.get('type')}", LCD_W - 30, app.font_bs, FG)
+            app.mtext(d, (12, self.y0 + 19), e.get("id", ""), ACC, big=True)
             nd = e.get("ndef") or []
             sub = nd[0]["text"] if nd else e.get("type", "")
-            app.fit(d, (12, BY0 + 35), sub, LCD_W - 30, app.font_t, YEL if nd else SUB)
+            app.fit(d, (12, self.y0 + 35), sub, LCD_W - 30, app.font_t, YEL if nd else SUB)
         else:
-            d.text((12, BY0 + 8), self.state, fill=FG if self.worker else WARN, font=app.font_s)
-            d.text((12, BY0 + 28), "Suica・NTAG・Mifare・電子ペーパーの札など", fill=SUB, font=app.font_t)
-        d.text((8, BY0 + 53), self.state if self.hist else "", fill=SUB, font=app.font_t)
-        y0 = BY0 + 67
+            d.text((12, self.y0 + 8), self.state, fill=FG if self.worker else WARN, font=app.font_s)
+            d.text((12, self.y0 + 28), "Suica・NTAG・Mifare・電子ペーパーの札など", fill=SUB, font=app.font_t)
+        d.text((8, self.y0 + 53), self.state if self.hist else "", fill=SUB, font=app.font_t)
+        y0 = self.y0 + 67
         rh = 13
         rows = (BY1 - y0) // rh
         first = max(0, self.sel - rows + 1)
@@ -1026,6 +1041,24 @@ class NfcView(View):
 # ================================================================ 4 MIDI
 class MidiView(View):
     key, name = "midi", "MIDI"
+
+    def link(self):
+        if not self.src:
+            return None
+        now = time.time()
+        grove = getattr(self, "kind", "") == "uart"
+        side = "黄 (RX) ← Unit MIDI など" if grove else "楽器 → CPZ"
+        if not self.reader:
+            return "IN", REC, "切断 (ESC で選び直し)", False
+        if getattr(self, "zero_warn", False) and now - self.reader.last_ev < 1.0:
+            return "IN", WARN, "00 ばかり — 相手の電源 / Grove の 5V を確認", True
+        if now - self.reader.last_ev < 0.3 and self.n_msg:
+            return "IN", OK, f"受信中   {side}", True
+        head = "開いています" if grove else "つながっています"
+        if not self.n_msg:
+            tail = "相手の有無は届くまで不明" if grove else "まだ何も来ていません"
+            return "IN", (SUB if grove else OK), f"{head} — {tail}   {side}", False
+        return "IN", OK, f"{head} — 無言 {int(now - self.reader.last_ev)}秒   {side}", False
     KIND_COL = {"on": ACC, "off": SUB, "cc": YEL, "pb": CYAN, "pc": (120, 230, 150), "sys": WARN, "rt": SUB}
 
     def __init__(self, app):
@@ -1053,6 +1086,8 @@ class MidiView(View):
             self.app.say(f"開けません: {e.strerror or e}", 4)
             return
         self.src = item[0]
+        self.kind = item[2][0] if isinstance(item[2], tuple) else ""
+        self.zero_warn = False
         self.box.clear()
         self.held.clear()
         self.box.add(f"--- {item[0]}  {item[1]} ---", ACC)
@@ -1076,6 +1111,7 @@ class MidiView(View):
                 self.box.add("--- " + ev[1] + " ---", REC)
                 self.log("# " + ev[1])
                 self.app.say(ev[1], 5)
+                self.zero_warn = True
                 dirty = True
                 continue
             if ev[0] != "msg":
@@ -1158,11 +1194,11 @@ class MidiView(View):
     def draw(self, img, d):
         app = self.app
         if not self.src:
-            d.text((6, BY0), "どの入力を見る?", fill=SUB, font=app.font_t)
-            self.pick.draw(app, d, BY0 + 14, ["MIDI の入力が見つかりません", "USB MIDI 機器を挿して R"])
+            d.text((6, self.y0), "どの入力を見る?", fill=SUB, font=app.font_t)
+            self.pick.draw(app, d, self.y0 + 14, ["MIDI の入力が見つかりません", "USB MIDI 機器を挿して R"])
             return
         # 88鍵 (A0〜C8) の帯。鳴っている音が光る
-        x0, y0, w = 4, BY0, LCD_W - 8
+        x0, y0, w = 4, self.y0, LCD_W - 8
         white = [n for n in range(21, 109) if n % 12 not in (1, 3, 6, 8, 10)]
         kw = w / len(white)
         for i, n in enumerate(white):
@@ -1182,6 +1218,15 @@ class MidiView(View):
 # ================================================================ 5 I2C
 class I2cView(View):
     key, name = "i2c", "I2C"
+
+    def link(self):
+        if self.err and not self.worker:
+            return "IN/OUT", REC, self.err, False
+        if not self.worker:
+            return None
+        lit = time.time() - self.worker.last_ev < 0.3
+        g = f"  Grove={self.grove}" if self.grove else ""
+        return "IN/OUT", OK, f"i2c-{self.bus} を2秒ごとに問い合わせ — {len(self.found)}個が返事{g}", lit
 
     def __init__(self, app):
         super().__init__(app)
@@ -1324,11 +1369,11 @@ class I2cView(View):
     def draw(self, img, d):
         app = self.app
         if self.bus is None:
-            d.text((10, BY0 + 20), self.err, fill=WARN, font=app.font_s)
+            d.text((10, self.y0 + 20), self.err, fill=WARN, font=app.font_s)
             return
-        cw, ch, x0, y0 = 18, 11, 22, BY0 + 11
+        cw, ch, x0, y0 = 18, (10 if self.y0 > BY0 else 11), 22, self.y0 + 11   # 帯がある時は1行を詰める
         for c in range(16):
-            app.mtext(d, (x0 + c * cw + 5, BY0), f"{c:X}", SUB)
+            app.mtext(d, (x0 + c * cw + 5, self.y0), f"{c:X}", SUB)
         for r in range(8):
             app.mtext(d, (2, y0 + r * ch), f"{r:X}0", SUB)
             for c in range(16):
@@ -1374,6 +1419,15 @@ class I2cView(View):
 # ================================================================ 6 IR
 class IrView(View):
     key, name = "ir", "IR"
+
+    def link(self):
+        if not self.worker:
+            return "IN", REC, "受光部がありません", False
+        lit = time.time() - self.worker.last_ev < 0.4
+        dev = os.path.basename(self.dev or "")
+        if lit:
+            return "IN", OK, f"受信中   リモコン → 受光部 ({dev})", True
+        return "IN", OK, f"待っています — 受光部 {dev} (GPIO13)   リモコン → CPZ", False
 
     def __init__(self, app):
         super().__init__(app)
@@ -1476,23 +1530,23 @@ class IrView(View):
             for i, t in enumerate(["赤外線の受信機がまだ有効になっていません", "",
                                    "1. sh install.sh --ir   (GPIO13 の受信を有効化)",
                                    "2. sudo reboot", "3. もう一度ここを開く"]):
-                d.text((8, BY0 + 6 + i * 16), t, fill=WARN if i == 0 else FG, font=app.font_s if i == 0 else app.font_t)
+                d.text((8, self.y0 + 6 + i * 16), t, fill=WARN if i == 0 else FG, font=app.font_s if i == 0 else app.font_t)
             return
         if self.detail is not None:
-            self.detail.draw(app, d, 4, BY0, LCD_W - 4, BY1)
+            self.detail.draw(app, d, 4, self.y0, LCD_W - 4, BY1)
             return
-        d.rounded_rectangle((4, BY0, LCD_W - 4, BY0 + 38), 6, fill=(18, 21, 29), outline=(40, 46, 60))
+        d.rounded_rectangle((4, self.y0, LCD_W - 4, self.y0 + 38), 6, fill=(18, 21, 29), outline=(40, 46, 60))
         if self.hist:
             e = self.hist[0]
             lit = time.time() - e["t"] < 0.4
-            d.text((12, BY0 + 2), e["proto"], fill=ACC if lit else FG, font=app.font_bs)
+            d.text((12, self.y0 + 2), e["proto"], fill=ACC if lit else FG, font=app.font_bs)
             if e["n"] > 1:
-                d.text((LCD_W - 50, BY0 + 2), f"×{e['n']}", fill=YEL, font=app.font_bs)
-            app.fit(d, (12, BY0 + 19), e["text"], LCD_W - 30, app.font_s, ACC)
+                d.text((LCD_W - 50, self.y0 + 2), f"×{e['n']}", fill=YEL, font=app.font_bs)
+            app.fit(d, (12, self.y0 + 19), e["text"], LCD_W - 30, app.font_s, ACC)
         else:
-            d.text((12, BY0 + 4), "リモコンを向けてボタンを押してね", fill=FG, font=app.font_s)
-            d.text((12, BY0 + 21), f"受信: {self.dev}", fill=SUB, font=app.font_t)
-        y0 = BY0 + 43
+            d.text((12, self.y0 + 4), "リモコンを向けてボタンを押してね", fill=FG, font=app.font_s)
+            d.text((12, self.y0 + 21), f"受信: {self.dev}", fill=SUB, font=app.font_t)
+        y0 = self.y0 + 43
         rh = 13
         rows = (BY1 - y0) // rh
         first = max(0, self.sel - rows + 1)
@@ -1512,6 +1566,13 @@ class TestView(View):
     """G22 (1kΩ 経由) と GND の2本のテスト線。つながったら鳴る / 断線探しモードでは離れたら鳴る。
     gpiod ならエッジの時刻 (ns) で瞬断の長さまで出す"""
     key, name = "test", "TEST"
+
+    def link(self):
+        if self.err or not self.worker:
+            return "IN", REC, self.err or "G22 を使えません", False
+        if self.conn:
+            return "IN", OK, "導通 — G22 が GND とつながっています", True
+        return "IN", SUB, "開放 — G22 (赤) と GND (黒) の間を測っています", False
     GLITCH = 0.05                 # これより短い「つながり/離れ」は瞬間的なもの (瞬断・チャタリング)
     SPAN = 10.0                   # 波形の表示秒数
 
@@ -1626,36 +1687,36 @@ class TestView(View):
             for i, t in enumerate(["G22 が読めません", self.err, "",
                                    "python3-libgpiod か pinctrl が要ります",
                                    "(sh install.sh で入ります。gpio グループも)"]):
-                app.fit(d, (10, BY0 + 6 + i * 16), t, LCD_W - 20, app.font_s if i == 0 else app.font_t,
+                app.fit(d, (10, self.y0 + 6 + i * 16), t, LCD_W - 20, app.font_s if i == 0 else app.font_t,
                         WARN if i == 0 else FG)
             return
         # 左: 大きな状態
         on = bool(self.conn)
         alarm = self.conn is not None and (on != self.find_break)
-        box = (4, BY0, 120, BY0 + 62)
+        box = (4, self.y0, 120, self.y0 + 62)
         d.rounded_rectangle(box, 8, fill=(30, 22, 46) if on else (18, 21, 29),
                             outline=(ACC if on else (60, 66, 80)) if not alarm or not self.find_break else WARN,
                             width=3 if alarm else 1)
-        cx, cy = 26, BY0 + 31
+        cx, cy = 26, self.y0 + 31
         d.ellipse((cx - 13, cy - 13, cx + 13, cy + 13), fill=ACC if on else (40, 44, 56))
         word = "?" if self.conn is None else ("導通" if on else "開放")
-        d.text((46, BY0 + 10), word, fill=FG if on else SUB, font=app.font_big)
+        d.text((46, self.y0 + 10), word, fill=FG if on else SUB, font=app.font_big)
         dur = ""
         if self.t_change is not None and self.hist:
             dur = f"{time.monotonic() - self.hist[-1][0]:.1f}s"
-        d.text((46, BY0 + 34), dur, fill=SUB, font=app.font_t)
+        d.text((46, self.y0 + 34), dur, fill=SUB, font=app.font_t)
         # 右: 数と最後の長さ
         x = 128
-        d.text((x, BY0), "断線探し (離れたら鳴る)" if self.find_break else "導通で鳴る", fill=YEL, font=app.font_t)
-        d.text((x, BY0 + 14), f"接触 {self.n_touch}回", fill=FG, font=app.font_s)
-        d.text((x + 90, BY0 + 14), f"瞬間 {self.n_glitch}回", fill=WARN if self.n_glitch else SUB, font=app.font_s)
+        d.text((x, self.y0), "断線探し (離れたら鳴る)" if self.find_break else "導通で鳴る", fill=YEL, font=app.font_t)
+        d.text((x, self.y0 + 14), f"接触 {self.n_touch}回", fill=FG, font=app.font_s)
+        d.text((x + 90, self.y0 + 14), f"瞬間 {self.n_glitch}回", fill=WARN if self.n_glitch else SUB, font=app.font_s)
         if self.last_dur is not None:
             ld = self.last_dur
-            d.text((x, BY0 + 31), "直前の長さ " + (f"{ld * 1000:.1f}ms" if ld < 1 else f"{ld:.2f}s"),
+            d.text((x, self.y0 + 31), "直前の長さ " + (f"{ld * 1000:.1f}ms" if ld < 1 else f"{ld:.2f}s"),
                    fill=SUB, font=app.font_t)
-        d.text((x, BY0 + 45), "約15kΩ以下で導通 (1kΩ込み)", fill=(90, 98, 115), font=app.font_t)
+        d.text((x, self.y0 + 45), "約15kΩ以下で導通 (1kΩ込み)", fill=(90, 98, 115), font=app.font_t)
         # 波形 (直近10秒)
-        gx0, gy0, gx1, gy1 = 4, BY0 + 66, LCD_W - 4, BY0 + 84
+        gx0, gy0, gx1, gy1 = 4, self.y0 + 66, LCD_W - 4, self.y0 + 84
         d.rectangle((gx0, gy0, gx1, gy1), outline=(40, 46, 60))
         now = time.monotonic()
         pts = [(t, c) for t, c in self.hist if now - t < self.SPAN]
@@ -1807,7 +1868,11 @@ class App:
             img = Image.new("RGB", (LCD_W, LCD_H), BG)
             if not self.view.broken:
                 try:
+                    st = self.view.link()
+                    self.view.y0 = BY0 + 14 if st else BY0
                     self.view.draw(img, ImageDraw.Draw(img))
+                    if st:
+                        self.draw_link(ImageDraw.Draw(img), st)
                 except Exception as e:
                     self.crash("draw", e)
                     img = Image.new("RGB", (LCD_W, LCD_H), BG)
@@ -1878,6 +1943,28 @@ class App:
                     os.remove(DEBUG_FLAG)
             except OSError:
                 pass
+
+    def draw_link(self, d, st):
+        """本文の上の帯: [IN] ● 受信中 … (色で状態、塗りの丸 = 今届いている)"""
+        tag, col, txt, lit = st
+        y = BY0
+        d.rectangle((4, y, LCD_W - 4, y + 11), fill=(col[0] // 6, col[1] // 6, col[2] // 6))
+        tw = int(self.font_t.getlength(tag)) + 6
+        d.rectangle((4, y, 4 + tw, y + 11), fill=(col[0] // 3, col[1] // 3, col[2] // 3))
+        d.text((7, y - 1), tag, fill=(235, 238, 245), font=self.font_t)
+        x = 4 + tw + 4
+        if lit:
+            d.ellipse((x, y + 2, x + 7, y + 9), fill=col)
+        else:
+            d.ellipse((x, y + 2, x + 7, y + 9), outline=col)
+        self.fit(d, (x + 11, y - 1), txt, LCD_W - 8 - (x + 11), self.font_t, col)
+
+    def link_sig(self):
+        try:
+            st = self.view.link() if (self.view and not self.view.broken) else None
+        except Exception:
+            return None
+        return (st[0], st[2], st[3]) if st else None
 
     def chrome(self, img):
         d = ImageDraw.Draw(img)
@@ -1957,6 +2044,9 @@ class App:
                     except Exception as e:
                         self.tick_error(e)
                         dirty = True
+                    sig = self.link_sig()                  # 帯の文字 (秒数など) が変わったら描き直す
+                    if sig != getattr(self, "_link_sig", None):
+                        self._link_sig, dirty = sig, True
                 now = time.time()
                 toast_on = self.toast[1] > now - 0.5
                 if (dirty or toast_on) and now - last_draw > 0.12:

@@ -76,6 +76,8 @@ class Worker:
     def run(self):
         pass
 
+    last_ev = 0.0                    # 最後に何か届いた時刻 (画面の「受信中」表示用)
+
     def events(self, limit=3000):
         out = []
         while len(out) < limit:
@@ -83,6 +85,8 @@ class Worker:
                 out.append(self.q.get_nowait())
             except queue.Empty:
                 break
+        if out:
+            self.last_ev = time.time()
         return out
 
     def stop(self):
