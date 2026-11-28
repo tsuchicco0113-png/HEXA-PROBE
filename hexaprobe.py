@@ -34,7 +34,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hp_backends as B  # noqa: E402
 
-VERSION = "0.2.10"
+VERSION = "0.2.11"
 LCD_W, LCD_H = 320, 170
 TOP_H, BOT_H = 18, 16
 BY0, BY1 = TOP_H + 2, LCD_H - BOT_H - 2          # 本文の上下
@@ -43,6 +43,7 @@ ACC = (176, 132, 255)                     # HEXA PROBE の強調色 (CLIP=緑 / 
 ACC_DIM = (40, 30, 64)
 WARN = (255, 150, 60)
 REC = (255, 70, 90)
+OK = (90, 220, 130)                         # つながっている
 NA = (70, 76, 90)
 YEL = (255, 214, 90)
 CYAN = (90, 220, 240)
@@ -482,6 +483,11 @@ class SerialView(View):
         self.path = None
         self.lost = 0.0          # 切断された時刻 (0 = 切断していない)。同じ口が戻ったらつなぎ直す
         self.retry = 0.0
+        self.opened = 0.0        # 開いた時刻 (接続表示用)
+        self.got_any = False     # 開いてから1ﾊﾞｲﾄでも来たか
+        self.zero_warn = False   # 00 ばかり (Grove の 5V OFF など)
+        self.gave_up = False     # 30秒待っても戻らなかった
+        self.last_sig = None
 
     def enter(self):
         self.pick.set(B.list_serial_ports())
@@ -498,6 +504,7 @@ class SerialView(View):
             self.app.say(f"開けません: {e.strerror or e}", 4)
             return
         self.port, self.path, self.lost = name, path, 0.0
+        self.opened, self.got_any, self.zero_warn, self.gave_up = time.time(), False, False, False
         self.box.clear()
         self.nbytes = 0
         self.partial = self.hexrow = b""
@@ -511,6 +518,7 @@ class SerialView(View):
             self.log("close")
 
     def feed(self, data, now):
+        self.got_any = True
         self.nbytes += len(data)
         self.rate.append((now, len(data)))
         self.last_rx = now
@@ -548,6 +556,7 @@ class SerialView(View):
         now = time.time()
         if now - self.lost > 30:
             self.lost = 0.0
+            self.gave_up = True
             self.box.add("--- 戻ってきませんでした (ESC で選び直し) ---", REC)
             return True
         if now - self.retry < 0.4 or not self.path or self.app.sim or not os.path.exists(self.path):
@@ -558,14 +567,40 @@ class SerialView(View):
         except OSError:
             return False
         self.lost = 0.0
+        self.opened, self.got_any = time.time(), False
         self.box.add(f"--- つなぎ直しました {self.port} {self.baud}bps ---", ACC)
         self.log(f"reopen {self.path}")
         return True
 
-    def tick(self):
+    def link_state(self):
+        """接続の様子を (色, 文字, 点灯) で。上の帯に出す"""
+        now = time.time()
         if not self.reader:
-            return self.reconnect() if (self.port and self.lost) else False
-        dirty = False
+            if self.lost:
+                return REC, f"切断 — 戻るのを待っています {int(now - self.lost)}/30秒", False
+            return REC, "切断 (ESC で選び直し)", False
+        if self.path and not self.app.sim and not os.path.exists(self.path):
+            return REC, "口が消えました", False
+        if self.zero_warn and now - self.last_rx < 1.0:
+            return WARN, "00 ばかり — 相手の電源 / Grove の 5V を確認", True
+        if now - self.last_rx < 0.3:
+            return OK, "受信中", True
+        # Grove UART は口が常にあるので、相手がいるかは文字が来るまで分からない (USB は機器が挿さっている = 接続)
+        grove = self.path == "/dev/serial0"
+        head = "開いています" if grove else "つながっています"
+        if not self.got_any:
+            tail = "相手の有無は文字が来るまで不明" if grove else "まだ何も来ていません"
+            return (SUB if grove else OK), f"{head} — {tail} {int(now - self.opened)}秒", False
+        return OK, f"{head} — 無言 {int(now - self.last_rx)}秒", False
+
+    def tick(self):
+        st = self.link_state() if self.port else None
+        sig = (st[1], st[2]) if st else None
+        changed = sig != self.last_sig
+        self.last_sig = sig
+        if not self.reader:
+            return (self.reconnect() if (self.port and self.lost) else False) or changed
+        dirty = changed
         for ev in self.reader.events():
             if ev[0] == "data":
                 self.feed(ev[1], time.time())
@@ -580,6 +615,7 @@ class SerialView(View):
                 self.box.add("--- " + ev[1] + " ---", REC)
                 self.log("# " + ev[1])
                 self.app.say(ev[1], 5)
+                self.zero_warn = True
                 dirty = True
         if time.time() - self.last_rx > 0.35:           # 改行の来ない行も出す
             if self.partial:
@@ -666,7 +702,16 @@ class SerialView(View):
                                                    "USB シリアル (ESP32 など) を挿して R",
                                                    "Grove UART は /dev/serial0 として出ます"])
             return
-        self.box.draw(self.app, d, 4, BY0, LCD_W - 4, BY1)
+        # 接続の帯: ● 受信中 / ○ つながっている (無言) / 赤 = 切断・待機
+        col, txt, lit = self.link_state()
+        y = BY0
+        d.rectangle((4, y, LCD_W - 4, y + 11), fill=(col[0] // 6, col[1] // 6, col[2] // 6))
+        if lit:
+            d.ellipse((7, y + 2, 14, y + 9), fill=col)
+        else:
+            d.ellipse((7, y + 2, 14, y + 9), outline=col)
+        self.app.fit(d, (18, y), txt, LCD_W - 26, self.app.font_t, col)
+        self.box.draw(self.app, d, 4, BY0 + 13, LCD_W - 4, BY1)
 
 
 # ================================================================ 2 BLE
